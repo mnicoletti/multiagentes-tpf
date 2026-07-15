@@ -1,0 +1,47 @@
+---
+description: Reglas core e invariantes de PortfolioSentinel
+alwaysApply: true
+---
+
+# PortfolioSentinel — Reglas core
+
+El diseño completo vive en `docs/` (SPEC + PLAN + ADRs 0001–0009). Estas reglas son invariantes y no se re-litigan por sesión.
+
+## Frontera dura: agente vs determinista (ADR-0002)
+- Ningún LLM genera, corrige, redondea ni interpreta números de tenencia, precios o totales. Salen del parser determinista y de la calculadora. Si le estás pidiendo a un modelo que calcule un monto, es un bug de diseño.
+- Parser, calculadora, validator/linter y tool ML son código puro y testeable — nunca prompts.
+- Las reglas del validator/linter viven en `config/guardrails.yaml`, no en prompts.
+
+## Privacidad — CRÍTICO (ADR-0006)
+- Cero PII real en el repo. Solo la fixture sintética (`INV-001`). Nunca commitees el `.xlsx` ni las imágenes reales.
+- El scrubbing de PII ocurre en el parser, antes de cualquier contexto LLM o escritura en BD.
+
+## Persistencia (ADR-0003)
+- BD de dominio append-only: prohibido UPDATE/DELETE en `snapshots`, `constraints`, `reports`. Revocar = insertar registro nuevo.
+- Checkpointer (ejecución, `thread_id`) ≠ store de dominio (negocio, vía MCP). Dos SQLite distintas.
+- El orquestador lee la BD en toda corrida y confirma restricciones con echo-back. Nunca aplica una restricción vieja en silencio.
+
+## LLM configurable (ADR-0009)
+- Toda instanciación pasa por `init_chat_model` leyendo `config/models.yaml` por rol. Prohibido hardcodear proveedor/modelo. Debe correr con Ollama cambiando solo YAML.
+
+## MCP (ADR-0005)
+- Dos servers FastMCP propios: `portfolio-store-mcp`, `market-data-mcp`. Web search es tool nativa, no MCP.
+- `market-data-mcp` siempre respeta el flag de modo fixture. Ni tests ni demo dependen de APIs vivas.
+
+## HITL (ADR-0001)
+- Falta un input para un número fino (ej. stop) → `interrupt()` y se pide. Prohibido inventar niveles; poblá `info_gaps`.
+
+## Salida al usuario
+- Todo informe: descargo de no-asesoramiento + estructura de 7 secciones (SPEC §6.3). El linter lo verifica; si falla, no sale.
+- El sistema no ejecuta órdenes. Prohibido lenguaje de ejecución en las salidas — el linter lo bloquea.
+
+## Estilo
+- Python 3.11+, Pydantic v2 en contratos de estado y tools. Bash con `set -euo pipefail`.
+- Comandos expuestos como targets de `Makefile`. Logs JSON en nodos deterministas, `run_id`↔`thread_id`.
+- Tests con `pytest`. Prompts y comentarios en rioplatense; nombres de código en inglés.
+
+## Qué NO hacer
+- No agregar agentes al roster 1+5 sin ADR nuevo.
+- No sustituir Chroma/SQLite por infra pesada: scope single-user local (ADR-0004).
+- No expandir A2A: es consultivo, no bloqueante, y el único ítem degradable (ADR-0008).
+- Si algo contradice la SPEC o un ADR: frená y emití un ADR nuevo (`Proposed`). No improvises.

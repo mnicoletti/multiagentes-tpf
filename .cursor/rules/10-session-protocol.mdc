@@ -1,0 +1,26 @@
+---
+description: Protocolo de arranque y cierre de cada sesión de implementación
+alwaysApply: true
+---
+
+# Protocolo de sesión
+
+## Al arrancar
+1. Leé `docs/SPEC-portfoliosentinel.md` completo.
+2. Leé la fase actual de `docs/PLAN-implementacion.md` y los ADRs que esa fase cita.
+3. Confirmá con una línea qué fase vas a implementar y cuál es su DoD, antes de escribir código.
+
+## Durante
+- Implementá **solo el alcance de la fase en curso**. No adelantes trabajo de fases posteriores ni "de paso".
+- La SPEC manda sobre cualquier suposición. Si algo no está definido, proponé y esperá confirmación — no inventes.
+- Los ADRs son la memoria entre sesiones: si una decisión te resulta rara, la respuesta está en su ADR.
+
+## Al cerrar
+- Corré el DoD de la fase y reportá cada ítem como **PASS/FAIL con evidencia** (comando + salida).
+- No declares una fase cerrada sin DoD en verde.
+- Si surgió una decisión de diseño nueva, dejá un ADR `Proposed` en `docs/adr/` antes de terminar.
+
+## Orden de fases (no saltear)
+F1 esqueleto+parser → F2 grafo mínimo → F3 store MCP → F4 mercado+RAG → F5 técnico+planificador+validator+HITL → F6 redactor+linter → F7 evals → F8 A2A+informe.
+
+Regla de degradación: si el 20/7 hay atraso, **solo F8 (A2A) cae o se degrada**. Ninguna otra fase es descartable.
