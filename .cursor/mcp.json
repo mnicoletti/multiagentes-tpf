@@ -1,0 +1,8 @@
+{
+    "mcpServers": {
+      "fastmcp-docs": {
+        "transport": "sse",
+        "url": "https://gofastmcp.com/mcp"
+      }
+    }
+  }
