@@ -1,0 +1,52 @@
+# Asignación de modelos por rol (ADR-0009).
+# Cambiar provider/model acá alcanza para demos con Anthropic u Ollama.
+# Prohibido hardcodear proveedor/modelo en el código.
+
+roles:
+  orquestador:
+    provider: anthropic
+    model: claude-haiku-4-5-20251001
+    params:
+      temperature: 0
+
+  cartera:
+    provider: anthropic
+    model: claude-sonnet-4-5-20250929
+    params:
+      temperature: 0
+
+  mercado:
+    provider: anthropic
+    model: claude-haiku-4-5-20251001
+    params:
+      temperature: 0
+
+  tecnico:
+    provider: anthropic
+    model: claude-sonnet-4-5-20250929
+    params:
+      temperature: 0
+
+  planificador:
+    provider: anthropic
+    model: claude-sonnet-4-5-20250929
+    params:
+      temperature: 0
+
+  redactor:
+    provider: anthropic
+    model: claude-sonnet-4-5-20250929
+    params:
+      temperature: 0
+
+  judge:
+    provider: anthropic
+    model: claude-sonnet-4-5-20250929
+    params:
+      temperature: 0
+
+  a2a:
+    provider: anthropic
+    model: claude-haiku-4-5-20251001
+    params:
+      temperature: 0

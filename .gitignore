@@ -4,3 +4,37 @@
 
 # LangGraph
 .langgraph_api/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.xlsx.bak
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Datos reales del usuario (nunca commitear)
+data/private/
+*.local.xlsx
+
+# SQLite runtime
+*.db
+*.sqlite
+*.sqlite3
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
