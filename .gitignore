@@ -29,10 +29,11 @@ build/
 data/private/
 *.local.xlsx
 
-# SQLite runtime
+# SQLite runtime / checkpointer local
 *.db
 *.sqlite
 *.sqlite3
+data/
 
 # OS / IDE
 .DS_Store

@@ -19,6 +19,7 @@ alwaysApply: true
 - Corré el DoD de la fase y reportá cada ítem como **PASS/FAIL con evidencia** (comando + salida).
 - No declares una fase cerrada sin DoD en verde.
 - Si surgió una decisión de diseño nueva, dejá un ADR `Proposed` en `docs/adr/` antes de terminar.
+- Una vez cerrada la fase, git commit con un mensaje que incluya la fase y un resumen de lo que implementaste, y git push. Solo en el cierre del desarrollo para la fase. No commits intermedios, ni commits de otras fases, ni commits de correcciones (bugfixes, refactors, etc), eso lo hacemos manualmente después (intervenciones del usuario).
 
 ## Orden de fases (no saltear)
 F1 esqueleto+parser → F2 grafo mínimo → F3 store MCP → F4 mercado+RAG → F5 técnico+planificador+validator+HITL → F6 redactor+linter → F7 evals → F8 A2A+informe.

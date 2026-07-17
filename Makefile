@@ -1,7 +1,10 @@
-.PHONY: lint run eval demo install test
+.PHONY: lint run eval demo install test inspect
 
 # Preferí el venv local si existe (PEP 668 / Homebrew).
 PYTHON := $(shell if [ -x .venv/bin/python ]; then echo .venv/bin/python; else echo python3; fi)
+
+# Override opcional: PORTFOLIOSENTINEL_MODELS_YAML=... make run
+MODELS_YAML ?=
 
 install:
 	python3 -m venv .venv
@@ -13,18 +16,24 @@ lint:
 	$(PYTHON) -m ruff check src tests scripts
 	$(PYTHON) -m ruff format --check src tests scripts
 
-# Stubs de fases posteriores — F1 solo implementa lint de verdad.
 run:
-	@echo "make run: stub F1 — el grafo se implementa en F2+"
-	@exit 1
+	@if [ -n "$(MODELS_YAML)" ]; then \
+		PORTFOLIOSENTINEL_MODELS_YAML="$(MODELS_YAML)" $(PYTHON) -m portfoliosentinel.cli run; \
+	else \
+		$(PYTHON) -m portfoliosentinel.cli run; \
+	fi
+
+inspect:
+	@test -n "$(THREAD_ID)" || (echo "Uso: make inspect THREAD_ID=<id>"; exit 1)
+	$(PYTHON) -m portfoliosentinel.cli inspect --thread-id "$(THREAD_ID)"
 
 eval:
-	@echo "make eval: stub F1 — el harness de evals se implementa en F7"
+	@echo "make eval: stub — el harness de evals se implementa en F7"
 	@exit 1
 
 demo:
-	@echo "make demo: stub F1 — la demo end-to-end se completa en F8"
+	@echo "make demo: stub — la demo end-to-end se completa en F8"
 	@exit 1
 
 test:
-	$(PYTHON) -m pytest tests/parser -q
+	$(PYTHON) -m pytest tests -q
