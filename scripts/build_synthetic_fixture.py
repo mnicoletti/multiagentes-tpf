@@ -24,11 +24,14 @@ POSITIONS: list[tuple[str, str, Decimal, Decimal, Decimal]] = [
     ("BONOS", "GD30", Decimal("100"), Decimal("8000.00"), Decimal("800000.00")),
     ("CEDEARS", "AAPL", Decimal("30"), Decimal("20000.00"), Decimal("600000.00")),
     ("CEDEARS", "MELI", Decimal("20"), Decimal("30000.00"), Decimal("600000.00")),
+    ("CEDEARS", "VIST", Decimal("10"), Decimal("10000.00"), Decimal("100000.00")),
+    # SPY plantado: CEDEAR de índice USA (no cluster genérico CEDEARs).
+    ("CEDEARS", "SPY", Decimal("5"), Decimal("20000.00"), Decimal("100000.00")),
 ]
 
-TOTAL_ARS = Decimal("24000000.00")  # cash ARS + sum posiciones
+TOTAL_ARS = Decimal("24200000.00")  # cash ARS + sum posiciones
 TOTAL_USD = Decimal("20000.00")
-# MEP implícito = 24000000 / 20000 = 1200 exacto
+MEP_IMPLIED = Decimal("1210")  # 24200000 / 20000
 
 
 def build(path: Path = OUT) -> Path:

@@ -54,11 +54,25 @@ POSITIONS = [
         "total": Decimal("600000.00"),
         "asset_class": "CEDEARS",
     },
+    {
+        "ticker": "VIST",
+        "quantity": Decimal("10"),
+        "price": Decimal("10000.00"),
+        "total": Decimal("100000.00"),
+        "asset_class": "CEDEARS",
+    },
+    {
+        "ticker": "SPY",
+        "quantity": Decimal("5"),
+        "price": Decimal("20000.00"),
+        "total": Decimal("100000.00"),
+        "asset_class": "CEDEARS",
+    },
 ]
 
-TOTAL_ARS = Decimal("24000000.00")
+TOTAL_ARS = Decimal("24200000.00")
 TOTAL_USD = Decimal("20000.00")
-MEP_IMPLIED = Decimal("1200")  # 24000000 / 20000 exacto
+MEP_IMPLIED = Decimal("1210")  # 24200000 / 20000
 
 # Sobreconcentración plantada: GGAL / TOTAL_ARS
-GGAL_WEIGHT = Decimal("16000000.00") / TOTAL_ARS  # 2/3
+GGAL_WEIGHT = Decimal("16000000.00") / TOTAL_ARS  # ~66.12%

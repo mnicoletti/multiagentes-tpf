@@ -10,15 +10,26 @@ class ClusterAssignment(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    name: str = Field(description="Nombre corto del cluster, ej. 'energía argentina'")
+    name: str = Field(
+        description=(
+            "Nombre corto del cluster por driver (ej. 'energía argentina'), "
+            "nunca por sección contable"
+        )
+    )
     driver: str = Field(description="Driver de riesgo en una línea")
-    tickers: list[str] = Field(description="Tickers del snapshot que pertenecen al cluster")
+    tickers: list[str] = Field(
+        min_length=1,
+        description="Al menos un ticker del snapshot; sin listas vacías",
+    )
 
 
 class CarteraLLMOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    clusters: list[ClusterAssignment] = Field(min_length=1)
+    clusters: list[ClusterAssignment] = Field(
+        min_length=1,
+        description="Partición completa del snapshot: cada ticker en exactamente un cluster",
+    )
     concentrations: list[str] = Field(
         description="Notas de concentración por posición y por cluster",
         min_length=1,

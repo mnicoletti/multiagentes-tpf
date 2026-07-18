@@ -43,25 +43,50 @@ def compute_position_weights(snapshot: Snapshot) -> list[PositionWeight]:
     ]
 
 
+def _normalize_assignment_tickers(
+    snapshot: Snapshot,
+    tickers: list[str],
+) -> list[str]:
+    by_ticker = {p.ticker.upper(): p for p in snapshot.positions}
+    uniq: list[str] = []
+    seen: set[str] = set()
+    for raw in tickers:
+        t = raw.upper().strip()
+        if not t or t in seen:
+            continue
+        if t not in by_ticker:
+            continue
+        seen.add(t)
+        uniq.append(t)
+    return uniq
+
+
+def cluster_coverage_gaps(
+    snapshot: Snapshot,
+    assignments: list[tuple[str, str, list[str]]],
+) -> set[str]:
+    """Tickers del snapshot que no quedaron asignados a ningún cluster válido."""
+    expected = {p.ticker.upper() for p in snapshot.positions}
+    assigned: set[str] = set()
+    for _name, _driver, tickers in assignments:
+        assigned.update(_normalize_assignment_tickers(snapshot, tickers))
+    return expected - assigned
+
+
 def materialize_clusters(
     snapshot: Snapshot,
     assignments: list[tuple[str, str, list[str]]],
+    *,
+    drop_empty: bool = True,
 ) -> list[RiskCluster]:
     """Dado (name, driver, tickers) del LLM, calcula total_ars y weight deterministas."""
     by_ticker = {p.ticker.upper(): p for p in snapshot.positions}
     total = snapshot.total_ars
     clusters: list[RiskCluster] = []
     for name, driver, tickers in assignments:
-        uniq = []
-        seen: set[str] = set()
-        for raw in tickers:
-            t = raw.upper().strip()
-            if not t or t in seen:
-                continue
-            if t not in by_ticker:
-                continue
-            seen.add(t)
-            uniq.append(t)
+        uniq = _normalize_assignment_tickers(snapshot, tickers)
+        if drop_empty and not uniq:
+            continue
         cluster_total = sum((by_ticker[t].total for t in uniq), Decimal("0"))
         clusters.append(
             RiskCluster(

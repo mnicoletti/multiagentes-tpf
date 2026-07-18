@@ -15,8 +15,9 @@ from portfoliosentinel.agents.prompts.cartera import (
 )
 from portfoliosentinel.config.models import get_chat_model
 from portfoliosentinel.graph.logging_utils import get_node_logger, log_json
-from portfoliosentinel.graph.state import Diagnosis, PortfolioState
+from portfoliosentinel.graph.state import Diagnosis, PortfolioState, Snapshot
 from portfoliosentinel.graph.weights import (
+    cluster_coverage_gaps,
     compute_class_weights,
     compute_position_weights,
     materialize_clusters,
@@ -24,6 +25,10 @@ from portfoliosentinel.graph.weights import (
 from portfoliosentinel.tools.parser import parse_account_statement
 
 logger = get_node_logger("portfoliosentinel.graph.nodes")
+
+
+class ClusterCoverageError(ValueError):
+    """El LLM no cubrió todos los tickers del snapshot tras el reintento."""
 
 
 def parser_node(state: PortfolioState) -> dict:
@@ -97,6 +102,59 @@ def _parse_cartera_json(raw: str) -> CarteraLLMOutput:
     return CarteraLLMOutput.model_validate(json.loads(text))
 
 
+def _assignments_from_llm(llm_out: CarteraLLMOutput) -> list[tuple[str, str, list[str]]]:
+    return [(c.name, c.driver, c.tickers) for c in llm_out.clusters]
+
+
+def _invoke_cartera_llm(model: object, user_msg: str) -> CarteraLLMOutput:
+    llm_out: CarteraLLMOutput | None = None
+    try:
+        structured = model.with_structured_output(CarteraLLMOutput)  # type: ignore[attr-defined]
+        result = structured.invoke(
+            [
+                SystemMessage(content=CARTERA_SYSTEM_PROMPT),
+                HumanMessage(content=user_msg),
+            ]
+        )
+        if isinstance(result, CarteraLLMOutput):
+            llm_out = result
+        elif isinstance(result, dict):
+            llm_out = CarteraLLMOutput.model_validate(result)
+    except Exception as exc:  # noqa: BLE001 — fallback JSON texto
+        log_json(logger, "cartera_structured_fallback", error=str(exc))
+
+    if llm_out is None:
+        raw = model.invoke(  # type: ignore[attr-defined]
+            [
+                SystemMessage(content=CARTERA_SYSTEM_PROMPT),
+                HumanMessage(
+                    content=user_msg + "\n\nRespondé ÚNICAMENTE un JSON con keys: "
+                    "clusters (list de {name,driver,tickers}), "
+                    "concentrations (list str), structural_diagnosis (str). "
+                    "Cada cluster debe tener tickers no vacío; cobertura total del snapshot."
+                ),
+            ]
+        )
+        content = raw.content if hasattr(raw, "content") else str(raw)
+        if isinstance(content, list):
+            content = "".join(
+                block.get("text", "") if isinstance(block, dict) else str(block)
+                for block in content
+            )
+        llm_out = _parse_cartera_json(str(content))
+    return llm_out
+
+
+def _coverage_feedback(missing: set[str]) -> str:
+    ordered = ", ".join(sorted(missing))
+    return (
+        f"\n\nCORRECCIÓN OBLIGATORIA: faltaron estos tickers en los clusters: {ordered}. "
+        "Reasigná la partición completa. Cada ticker del snapshot en exactamente un cluster; "
+        "ningún cluster vacío. Si falta VIST, ponelo en el cluster energético junto a YPFD "
+        "(es CEDEAR de energía, no lo agrupes por sección CEDEARS)."
+    )
+
+
 def analista_cartera_node(state: PortfolioState) -> dict:
     """Analista de Cartera: pesos deterministas + clustering semántico vía LLM."""
     run_id = state.get("run_id", "")
@@ -106,6 +164,7 @@ def analista_cartera_node(state: PortfolioState) -> dict:
 
     class_weights = compute_class_weights(snapshot)
     position_weights = compute_position_weights(snapshot)
+    tickers_must_cover = ", ".join(p.ticker for p in snapshot.positions)
 
     positions_table = "\n".join(
         f"- {p.ticker} [{p.asset_class}] qty={p.quantity} price={p.price} total={p.total}"
@@ -125,48 +184,32 @@ def analista_cartera_node(state: PortfolioState) -> dict:
         mep_implied=str(snapshot.mep_implied),
         total_ars=str(snapshot.total_ars),
         total_usd=str(snapshot.total_usd),
+        tickers_must_cover=tickers_must_cover,
     )
 
     model = get_chat_model("cartera")
-    llm_out: CarteraLLMOutput | None = None
-    try:
-        structured = model.with_structured_output(CarteraLLMOutput)
-        result = structured.invoke(
-            [
-                SystemMessage(content=CARTERA_SYSTEM_PROMPT),
-                HumanMessage(content=user_msg),
-            ]
-        )
-        if isinstance(result, CarteraLLMOutput):
-            llm_out = result
-        elif isinstance(result, dict):
-            llm_out = CarteraLLMOutput.model_validate(result)
-    except Exception as exc:  # noqa: BLE001 — fallback JSON texto
-        log_json(logger, "cartera_structured_fallback", run_id=run_id, error=str(exc))
+    llm_out = _invoke_cartera_llm(model, user_msg)
+    assignments = _assignments_from_llm(llm_out)
+    gaps = cluster_coverage_gaps(snapshot, assignments)
 
-    if llm_out is None:
-        raw = model.invoke(
-            [
-                SystemMessage(content=CARTERA_SYSTEM_PROMPT),
-                HumanMessage(
-                    content=user_msg + "\n\nRespondé ÚNICAMENTE un JSON con keys: "
-                    "clusters (list de {name,driver,tickers}), "
-                    "concentrations (list str), structural_diagnosis (str)."
-                ),
-            ]
+    if gaps:
+        log_json(
+            logger,
+            "cartera_coverage_retry",
+            run_id=run_id,
+            missing=sorted(gaps),
         )
-        content = raw.content if hasattr(raw, "content") else str(raw)
-        if isinstance(content, list):
-            content = "".join(
-                block.get("text", "") if isinstance(block, dict) else str(block)
-                for block in content
-            )
-        llm_out = _parse_cartera_json(str(content))
+        llm_out = _invoke_cartera_llm(model, user_msg + _coverage_feedback(gaps))
+        assignments = _assignments_from_llm(llm_out)
+        gaps = cluster_coverage_gaps(snapshot, assignments)
 
-    clusters = materialize_clusters(
-        snapshot,
-        [(c.name, c.driver, c.tickers) for c in llm_out.clusters],
-    )
+    if gaps:
+        raise ClusterCoverageError(
+            f"Clustering incompleto tras reintento; faltan tickers: {sorted(gaps)}"
+        )
+
+    clusters = materialize_clusters(snapshot, assignments, drop_empty=True)
+    _assert_full_coverage_after_materialize(snapshot, clusters)
 
     diagnosis = Diagnosis(
         class_weights=class_weights,
@@ -185,3 +228,13 @@ def analista_cartera_node(state: PortfolioState) -> dict:
         diagnosis=diagnosis.structural_diagnosis,
     )
     return {"diagnosis": diagnosis}
+
+
+def _assert_full_coverage_after_materialize(snapshot: Snapshot, clusters: list) -> None:
+    assigned = {t for c in clusters for t in c.tickers}
+    expected = {p.ticker.upper() for p in snapshot.positions}
+    missing = expected - assigned
+    if missing:
+        raise ClusterCoverageError(
+            f"Clustering incompleto tras materializar; faltan tickers: {sorted(missing)}"
+        )
