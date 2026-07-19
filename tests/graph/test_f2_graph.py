@@ -96,22 +96,29 @@ def test_cluster_coverage_gaps_detects_omitted_tickers(snapshot):
     assert not any(c.name == "consumo LatAm" for c in clusters)
 
 
-def test_checkpoint_after_parser(tmp_path: Path, snapshot):
-    """Sin LLM: interrupt tras parser y re-inspección por thread_id."""
-    db = tmp_path / "ck.sqlite"
+def test_checkpoint_after_intake(tmp_path: Path, snapshot):
+    """Sin LLM: interrupt tras intake y re-inspección por thread_id."""
+    ck = tmp_path / "ck.sqlite"
+    domain = tmp_path / "domain.sqlite"
     thread_id = f"test-{uuid.uuid4()}"
-    checkpointer, conn = get_checkpointer(db)
+    checkpointer, conn = get_checkpointer(ck)
     try:
-        graph = build_graph(checkpointer=checkpointer, interrupt_after=["parser"])
+        graph = build_graph(
+            checkpointer=checkpointer,
+            domain_db=domain,
+            interrupt_after=["intake"],
+            include_cartera=False,
+        )
         config = {"configurable": {"thread_id": thread_id}}
         result = graph.invoke(
             {
                 "run_id": thread_id,
-                "inputs": RunInputs(xlsx_path=str(FIXTURE)),
+                "inputs": RunInputs(xlsx_path=str(FIXTURE), auto_confirm_constraints=True),
                 "snapshot": None,
                 "degraded_mode": False,
                 "constraints": [],
                 "prev_snapshot": None,
+                "staleness": None,
                 "diagnosis": None,
                 "market_context": None,
                 "technical_readings": [],

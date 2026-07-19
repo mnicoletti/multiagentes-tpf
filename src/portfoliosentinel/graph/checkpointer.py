@@ -16,6 +16,7 @@ from portfoliosentinel.config.settings import DEFAULT_CHECKPOINT_DB
 _ALLOWED_MSGPACK_MODULES: list[tuple[str, ...]] = [
     ("portfoliosentinel.graph.state", "RunInputs"),
     ("portfoliosentinel.graph.state", "Constraint"),
+    ("portfoliosentinel.graph.state", "StalenessInfo"),
     ("portfoliosentinel.graph.state", "ClassWeight"),
     ("portfoliosentinel.graph.state", "PositionWeight"),
     ("portfoliosentinel.graph.state", "RiskCluster"),

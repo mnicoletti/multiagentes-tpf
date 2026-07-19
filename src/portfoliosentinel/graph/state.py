@@ -23,6 +23,30 @@ def _as_decimal(value: Decimal | int | float | str) -> Decimal:
     return Decimal(str(value))
 
 
+class Constraint(BaseModel):
+    """Restricción dura del usuario (persistida en F3+ vía MCP)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str | None = None
+    rule: str
+    ticker: str | None = None
+    status: Literal["active", "revoked", "pending_confirmation"] = "active"
+    source: Literal["db", "run", "echo"] = "run"
+    confirmed: bool = False
+
+
+class StalenessInfo(BaseModel):
+    """Marca de staleness en modo degradado (SPEC §6.1, ADR-0003)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    snapshot_id: str | None = None
+    snapshot_ts: str | None = None
+    warning: str
+    block_fine_quantities: bool = True
+
+
 class RunInputs(BaseModel):
     """Inputs de una corrida on-demand."""
 
@@ -36,6 +60,10 @@ class RunInputs(BaseModel):
     )
     capital_new_ars: Decimal | None = None
     new_constraints_text: str | None = None
+    # Restricciones estructuradas declaradas en esta corrida (antes del echo-back).
+    new_constraints: list[Constraint] = Field(default_factory=list)
+    # Si True, el orquestador no pausa: confirma todas las restricciones del echo-back.
+    auto_confirm_constraints: bool = False
     user_notes: str | None = None
 
     @field_validator("capital_new_ars", mode="before")
@@ -44,18 +72,6 @@ class RunInputs(BaseModel):
         if v is None or v == "":
             return None
         return _as_decimal(v)  # type: ignore[arg-type]
-
-
-class Constraint(BaseModel):
-    """Restricción dura del usuario (persistida en F3+ vía MCP)."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    id: str | None = None
-    rule: str
-    ticker: str | None = None
-    status: Literal["active", "revoked", "pending_confirmation"] = "active"
-    source: Literal["db", "run", "echo"] = "run"
 
 
 class ClassWeight(BaseModel):
@@ -191,6 +207,7 @@ class PortfolioState(TypedDict, total=False):
     degraded_mode: bool
     constraints: list[Constraint]
     prev_snapshot: Snapshot | None
+    staleness: StalenessInfo | None
     diagnosis: Diagnosis | None
     market_context: MarketContext | None
     technical_readings: list[TechnicalReading]

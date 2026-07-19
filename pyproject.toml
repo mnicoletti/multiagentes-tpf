@@ -18,6 +18,7 @@ dependencies = [
   "langchain-ollama>=0.2",
   "langgraph>=0.2",
   "langgraph-checkpoint-sqlite>=2.0",
+  "mcp>=1.0",
 ]
 
 [project.optional-dependencies]
@@ -30,7 +31,8 @@ dev = [
 portfoliosentinel = "portfoliosentinel.cli:main"
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["src", "."]
+include = ["portfoliosentinel*", "mcp_servers*"]
 
 [tool.setuptools.package-data]
 portfoliosentinel = ["config/*.yaml"]

@@ -12,6 +12,7 @@ from portfoliosentinel.graph.state import (
     RebalancePlan,
     RunInputs,
     Snapshot,
+    StalenessInfo,
     TechnicalReading,
     ValidationResult,
 )
@@ -26,6 +27,7 @@ __all__ = [
     "RebalancePlan",
     "RunInputs",
     "Snapshot",
+    "StalenessInfo",
     "TechnicalReading",
     "ValidationResult",
     "build_graph",

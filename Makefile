@@ -13,8 +13,8 @@ install:
 	.venv/bin/python scripts/build_synthetic_fixture.py
 
 lint:
-	$(PYTHON) -m ruff check src tests scripts
-	$(PYTHON) -m ruff format --check src tests scripts
+	$(PYTHON) -m ruff check src tests scripts mcp_servers
+	$(PYTHON) -m ruff format --check src tests scripts mcp_servers
 
 run:
 	@if [ -n "$(MODELS_YAML)" ]; then \

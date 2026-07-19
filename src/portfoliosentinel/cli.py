@@ -1,4 +1,4 @@
-"""CLI de PortfolioSentinel — corrida F2 mínima con checkpointer."""
+"""CLI de PortfolioSentinel — corrida F3 con store de dominio + checkpointer."""
 
 from __future__ import annotations
 
@@ -10,10 +10,17 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from portfoliosentinel.config.settings import DEFAULT_CHECKPOINT_DB, DEFAULT_FIXTURE_XLSX
+from langgraph.types import Command
+
+from portfoliosentinel.config.settings import (
+    DEFAULT_CHECKPOINT_DB,
+    DEFAULT_DOMAIN_DB,
+    DEFAULT_FIXTURE_XLSX,
+)
 from portfoliosentinel.graph.builder import build_graph
 from portfoliosentinel.graph.checkpointer import get_checkpointer
 from portfoliosentinel.graph.state import Diagnosis, PortfolioState, RunInputs
+from portfoliosentinel.tools.portfolio_store import open_domain_store
 
 
 def _dec(v: Decimal) -> str:
@@ -26,7 +33,7 @@ def _pct(weight: Decimal) -> str:
 
 def format_radiografia(diagnosis: Diagnosis, *, run_id: str, thread_id: str) -> str:
     lines = [
-        "=== Radiografía de cartera (F2) ===",
+        "=== Radiografía de cartera ===",
         f"run_id={run_id}  thread_id={thread_id}",
         "",
         f"MEP implícito: {_dec(diagnosis.mep_implied)}",
@@ -63,14 +70,25 @@ def _langsmith_configured() -> bool:
     return os.environ.get("LANGCHAIN_TRACING_V2", "").lower() in {"1", "true", "yes"}
 
 
-def _initial_state(*, xlsx: Path, run_id: str) -> PortfolioState:
+def _initial_state(
+    *,
+    xlsx: Path | None,
+    run_id: str,
+    auto_confirm: bool,
+    constraints_text: str | None,
+) -> PortfolioState:
     return {
         "run_id": run_id,
-        "inputs": RunInputs(xlsx_path=str(xlsx)),
+        "inputs": RunInputs(
+            xlsx_path=str(xlsx) if xlsx else None,
+            auto_confirm_constraints=auto_confirm,
+            new_constraints_text=constraints_text,
+        ),
         "snapshot": None,
         "degraded_mode": False,
         "constraints": [],
         "prev_snapshot": None,
+        "staleness": None,
         "diagnosis": None,
         "market_context": None,
         "technical_readings": [],
@@ -82,27 +100,72 @@ def _initial_state(*, xlsx: Path, run_id: str) -> PortfolioState:
     }
 
 
+def _print_interrupt_payload(payload: Any) -> None:
+    print("\n=== Echo-back de restricciones (HITL) ===", flush=True)
+    if isinstance(payload, dict):
+        print(json.dumps(payload, ensure_ascii=False, indent=2), flush=True)
+    else:
+        print(payload, flush=True)
+    print(
+        "Reanudá con: portfoliosentinel resume --thread-id <id> --confirm-constraints",
+        flush=True,
+    )
+
+
 def cmd_run(args: argparse.Namespace) -> int:
-    xlsx = Path(args.xlsx)
-    if not xlsx.is_file():
-        raise SystemExit(f"No existe el .xlsx: {xlsx}")
+    xlsx: Path | None
+    if args.no_xlsx:
+        xlsx = None
+    else:
+        xlsx = Path(args.xlsx)
+        if not xlsx.is_file():
+            raise SystemExit(f"No existe el .xlsx: {xlsx}")
 
     thread_id = args.thread_id or str(uuid.uuid4())
     run_id = args.run_id or thread_id
     db_path = Path(args.checkpoint_db)
+    domain_db = Path(args.domain_db)
     interrupt_after = [args.stop_after] if args.stop_after else None
+    auto_confirm = bool(args.confirm_constraints)
 
+    store = open_domain_store(domain_db)
     checkpointer, conn = get_checkpointer(db_path)
     try:
-        graph = build_graph(checkpointer=checkpointer, interrupt_after=interrupt_after)
+        graph = build_graph(
+            checkpointer=checkpointer,
+            store=store,
+            interrupt_after=interrupt_after,
+        )
         config: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
-        result = graph.invoke(_initial_state(xlsx=xlsx, run_id=run_id), config=config)
-        diagnosis = result.get("diagnosis")
+        result = graph.invoke(
+            _initial_state(
+                xlsx=xlsx,
+                run_id=run_id,
+                auto_confirm=auto_confirm,
+                constraints_text=args.constraint,
+            ),
+            config=config,
+        )
 
-        if diagnosis is None:
-            pause = f" tras '{args.stop_after}'" if args.stop_after else ""
+        # Si quedó en interrupt de echo-back:
+        state_snap = graph.get_state(config)
+        if state_snap.next and not result.get("report"):
+            tasks = getattr(state_snap, "tasks", ()) or ()
+            for task in tasks:
+                interrupts = getattr(task, "interrupts", ()) or ()
+                for ir in interrupts:
+                    _print_interrupt_payload(getattr(ir, "value", ir))
             print(
-                f"[checkpoint] Corrida pausada{pause}. thread_id={thread_id} db={db_path}",
+                f"[checkpoint] Esperando confirmación de restricciones. thread_id={thread_id}",
+                flush=True,
+            )
+            return 0
+
+        diagnosis = result.get("diagnosis")
+        if diagnosis is None and args.stop_after:
+            print(
+                f"[checkpoint] Corrida pausada tras '{args.stop_after}'. "
+                f"thread_id={thread_id} db={db_path}",
                 flush=True,
             )
             snap = result.get("snapshot")
@@ -112,9 +175,20 @@ def cmd_run(args: argparse.Namespace) -> int:
                     f"total_ars={snap.total_ars}, mep={snap.mep_implied}",
                     flush=True,
                 )
+            if result.get("degraded_mode"):
+                print(f"  degraded_mode=True  staleness={result.get('staleness')}", flush=True)
             return 0
 
-        print(format_radiografia(diagnosis, run_id=run_id, thread_id=thread_id))
+        if diagnosis is not None:
+            print(format_radiografia(diagnosis, run_id=run_id, thread_id=thread_id))
+        if result.get("degraded_mode"):
+            st = result.get("staleness")
+            print("\n[degraded] modo degradado activo", flush=True)
+            if st is not None:
+                print(f"  {st.warning}", flush=True)
+        if result.get("report"):
+            print("\n--- Informe stub persistido ---", flush=True)
+            print(result["report"], flush=True)
         if _langsmith_configured():
             print("\n[observabilidad] LangSmith configurado (env vars presentes).")
         else:
@@ -125,13 +199,16 @@ def cmd_run(args: argparse.Namespace) -> int:
         return 0
     finally:
         conn.close()
+        store.close()
 
 
 def cmd_inspect(args: argparse.Namespace) -> int:
     db_path = Path(args.checkpoint_db)
+    domain_db = Path(args.domain_db)
     checkpointer, conn = get_checkpointer(db_path)
+    store = open_domain_store(domain_db)
     try:
-        graph = build_graph(checkpointer=checkpointer)
+        graph = build_graph(checkpointer=checkpointer, store=store)
         config = {"configurable": {"thread_id": args.thread_id}}
         snap = graph.get_state(config)
         if snap is None or snap.values is None or not snap.values:
@@ -146,7 +223,12 @@ def cmd_inspect(args: argparse.Namespace) -> int:
             "degraded_mode": values.get("degraded_mode"),
             "has_snapshot": values.get("snapshot") is not None,
             "has_diagnosis": values.get("diagnosis") is not None,
+            "has_report": values.get("report") is not None,
+            "constraints": [c.model_dump() for c in (values.get("constraints") or [])],
         }
+        staleness = values.get("staleness")
+        if staleness is not None:
+            payload["staleness"] = staleness.model_dump()
         snapshot = values.get("snapshot")
         if snapshot is not None:
             payload["snapshot"] = {
@@ -171,40 +253,72 @@ def cmd_inspect(args: argparse.Namespace) -> int:
         return 0
     finally:
         conn.close()
+        store.close()
 
 
 def cmd_resume(args: argparse.Namespace) -> int:
     db_path = Path(args.checkpoint_db)
+    domain_db = Path(args.domain_db)
     checkpointer, conn = get_checkpointer(db_path)
+    store = open_domain_store(domain_db)
     try:
-        graph = build_graph(checkpointer=checkpointer)
+        graph = build_graph(checkpointer=checkpointer, store=store)
         config = {"configurable": {"thread_id": args.thread_id}}
-        result = graph.invoke(None, config=config)
+        resume_payload: dict[str, Any] = {"action": "confirm_all"}
+        if args.revoke_ids:
+            resume_payload = {
+                "action": "confirm",
+                "revoke_ids": [x.strip() for x in args.revoke_ids.split(",") if x.strip()],
+                "confirm_ids": None,
+            }
+        result = graph.invoke(Command(resume=resume_payload), config=config)
         diagnosis = result.get("diagnosis")
         run_id = result.get("run_id", args.thread_id)
-        if diagnosis is None:
-            print("Resume terminó sin diagnosis (¿sigue pausado?)")
+        if diagnosis is not None:
+            print(format_radiografia(diagnosis, run_id=run_id, thread_id=args.thread_id))
+        if result.get("report"):
+            print("\n--- Informe stub persistido ---")
+            print(result["report"])
+        if diagnosis is None and not result.get("report"):
+            print("Resume terminó sin diagnosis/report (¿sigue pausado?)")
             return 1
-        print(format_radiografia(diagnosis, run_id=run_id, thread_id=args.thread_id))
         return 0
     finally:
         conn.close()
+        store.close()
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="portfoliosentinel", description="PortfolioSentinel CLI")
     sub = p.add_subparsers(dest="command", required=True)
 
-    run = sub.add_parser("run", help="Corrida F2: parser → orquestador → analista de cartera")
+    run = sub.add_parser("run", help="Corrida: intake → orquestador → cartera → persist")
     run.add_argument("--xlsx", type=str, default=str(DEFAULT_FIXTURE_XLSX))
+    run.add_argument(
+        "--no-xlsx",
+        action="store_true",
+        help="Modo degradado: usa el último snapshot del store de dominio",
+    )
     run.add_argument("--thread-id", type=str, default=None)
     run.add_argument("--run-id", type=str, default=None)
     run.add_argument("--checkpoint-db", type=str, default=str(DEFAULT_CHECKPOINT_DB))
+    run.add_argument("--domain-db", type=str, default=str(DEFAULT_DOMAIN_DB))
+    run.add_argument(
+        "--constraint",
+        type=str,
+        default=None,
+        help='Texto de restricción nueva, ej. "no vender YPFD"',
+    )
+    run.add_argument(
+        "--confirm-constraints",
+        action="store_true",
+        help="Auto-confirma el echo-back (sin interrupt HITL)",
+    )
     run.add_argument(
         "--stop-after",
         type=str,
         default=None,
-        choices=["parser", "orquestador"],
+        choices=["intake", "orquestador"],
         help="Pausa tras el nodo (checkpoint) para demo de inspección",
     )
     run.set_defaults(func=cmd_run)
@@ -212,11 +326,25 @@ def build_parser() -> argparse.ArgumentParser:
     insp = sub.add_parser("inspect", help="Inspecciona estado checkpointeado por thread_id")
     insp.add_argument("--thread-id", type=str, required=True)
     insp.add_argument("--checkpoint-db", type=str, default=str(DEFAULT_CHECKPOINT_DB))
+    insp.add_argument("--domain-db", type=str, default=str(DEFAULT_DOMAIN_DB))
     insp.set_defaults(func=cmd_inspect)
 
     nxt = sub.add_parser("resume", help="Reanuda una corrida pausada por thread_id")
     nxt.add_argument("--thread-id", type=str, required=True)
     nxt.add_argument("--checkpoint-db", type=str, default=str(DEFAULT_CHECKPOINT_DB))
+    nxt.add_argument("--domain-db", type=str, default=str(DEFAULT_DOMAIN_DB))
+    nxt.add_argument(
+        "--confirm-constraints",
+        action="store_true",
+        default=True,
+        help="Confirma todas las restricciones del echo-back (default)",
+    )
+    nxt.add_argument(
+        "--revoke-ids",
+        type=str,
+        default=None,
+        help="IDs de restricciones a revocar (comma-separated)",
+    )
     nxt.set_defaults(func=cmd_resume)
 
     return p

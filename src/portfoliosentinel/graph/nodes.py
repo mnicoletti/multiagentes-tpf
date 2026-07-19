@@ -1,13 +1,17 @@
-"""Nodos del grafo mínimo F2: parser → orquestador → analista de cartera."""
+"""Nodos del grafo: intake → orquestador → analista_cartera → persist (F3)."""
 
 from __future__ import annotations
 
 import json
 import re
+from datetime import date
 from decimal import Decimal
+from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
+from langgraph.types import interrupt
 
+from mcp_servers.portfolio_store.db import PortfolioStore
 from portfoliosentinel.agents.cartera import CarteraLLMOutput
 from portfoliosentinel.agents.prompts.cartera import (
     CARTERA_SYSTEM_PROMPT,
@@ -15,7 +19,13 @@ from portfoliosentinel.agents.prompts.cartera import (
 )
 from portfoliosentinel.config.models import get_chat_model
 from portfoliosentinel.graph.logging_utils import get_node_logger, log_json
-from portfoliosentinel.graph.state import Diagnosis, PortfolioState, Snapshot
+from portfoliosentinel.graph.state import (
+    Constraint,
+    Diagnosis,
+    PortfolioState,
+    Snapshot,
+    StalenessInfo,
+)
 from portfoliosentinel.graph.weights import (
     cluster_coverage_gaps,
     compute_class_weights,
@@ -23,6 +33,10 @@ from portfoliosentinel.graph.weights import (
     materialize_clusters,
 )
 from portfoliosentinel.tools.parser import parse_account_statement
+from portfoliosentinel.tools.portfolio_store import (
+    snapshot_from_store_dict,
+    snapshot_to_store_dict,
+)
 
 logger = get_node_logger("portfoliosentinel.graph.nodes")
 
@@ -31,56 +45,247 @@ class ClusterCoverageError(ValueError):
     """El LLM no cubrió todos los tickers del snapshot tras el reintento."""
 
 
-def parser_node(state: PortfolioState) -> dict:
-    """Nodo determinista: .xlsx → snapshot tipado (F1)."""
+class MissingSnapshotError(ValueError):
+    """Modo degradado sin snapshot previo en el store de dominio."""
+
+
+def _parse_constraints_from_text(text: str | None) -> list[Constraint]:
+    """Heurística mínima: 'no vender TICKER' → restricción dura."""
+    if not text or not text.strip():
+        return []
+    found: list[Constraint] = []
+    for match in re.finditer(r"no\s+vender\s+([A-Za-z0-9.]+)", text, flags=re.IGNORECASE):
+        ticker = match.group(1).upper()
+        found.append(
+            Constraint(
+                rule=f"no vender {ticker}",
+                ticker=ticker,
+                status="pending_confirmation",
+                source="run",
+                confirmed=False,
+            )
+        )
+    return found
+
+
+def _staleness_warning(snapshot_ts: str | None, as_of: date | None) -> str:
+    label = as_of.strftime("%d/%m") if as_of else (snapshot_ts or "fecha desconocida")
+    if snapshot_ts and as_of is None:
+        # ts ISO → DD/MM si se puede
+        try:
+            label = date.fromisoformat(snapshot_ts[:10]).strftime("%d/%m")
+        except ValueError:
+            label = snapshot_ts[:10]
+    return (
+        f"análisis sobre snapshot del {label} — "
+        "precios/tenencias posiblemente desactualizados; "
+        "acciones con cantidades finas condicionadas/bloqueadas"
+    )
+
+
+def intake_node(state: PortfolioState, *, store: PortfolioStore) -> dict:
+    """Intake F3: lee BD siempre; parsea .xlsx o carga último snapshot (degraded)."""
     run_id = state.get("run_id", "")
     inputs = state["inputs"]
-    if not inputs.xlsx_path:
-        raise ValueError("F2 requiere inputs.xlsx_path; el modo degradado sin .xlsx llega en F3")
 
-    snapshot = parse_account_statement(inputs.xlsx_path)
+    last_row = store.read_last_snapshot()
+    prev_snapshot: Snapshot | None = None
+    last_meta: dict[str, Any] | None = None
+    if last_row is not None:
+        prev_snapshot = snapshot_from_store_dict(last_row["data"])
+        last_meta = {
+            "id": last_row["id"],
+            "ts": last_row["ts"],
+            "source": last_row["source"],
+        }
+
+    db_constraints = [
+        Constraint(
+            id=c["id"],
+            rule=c["rule"],
+            ticker=c.get("ticker"),
+            status="pending_confirmation",
+            source="db",
+            confirmed=False,
+        )
+        for c in store.read_active_constraints()
+    ]
+    run_constraints = list(inputs.new_constraints) + _parse_constraints_from_text(
+        inputs.new_constraints_text
+    )
+    for c in run_constraints:
+        c.status = "pending_confirmation"
+        c.source = "run"
+        c.confirmed = False
+
+    constraints = db_constraints + run_constraints
+
+    if inputs.xlsx_path:
+        snapshot = parse_account_statement(inputs.xlsx_path)
+        log_json(
+            logger,
+            "intake_parsed",
+            run_id=run_id,
+            positions=len(snapshot.positions),
+            total_ars=str(snapshot.total_ars),
+            mep_implied=str(snapshot.mep_implied),
+            investor_alias=snapshot.investor_alias,
+            constraints_pending=len(constraints),
+            has_prev_snapshot=prev_snapshot is not None,
+        )
+        return {
+            "snapshot": snapshot,
+            "prev_snapshot": prev_snapshot,
+            "degraded_mode": False,
+            "staleness": None,
+            "constraints": constraints,
+            "technical_readings": state.get("technical_readings") or [],
+            "info_gaps": state.get("info_gaps") or [],
+        }
+
+    # Modo degradado: sin .xlsx → último snapshot + staleness.
+    if prev_snapshot is None or last_meta is None:
+        raise MissingSnapshotError(
+            "Modo degradado: no hay snapshot previo en el store de dominio. "
+            "Corré primero con un .xlsx."
+        )
+
+    staleness = StalenessInfo(
+        snapshot_id=last_meta["id"],
+        snapshot_ts=last_meta["ts"],
+        warning=_staleness_warning(last_meta["ts"], prev_snapshot.as_of),
+        block_fine_quantities=True,
+    )
     log_json(
         logger,
-        "parser_done",
+        "intake_degraded",
         run_id=run_id,
-        positions=len(snapshot.positions),
-        total_ars=str(snapshot.total_ars),
-        mep_implied=str(snapshot.mep_implied),
-        investor_alias=snapshot.investor_alias,
+        snapshot_id=staleness.snapshot_id,
+        snapshot_ts=staleness.snapshot_ts,
+        warning=staleness.warning,
+        constraints_pending=len(constraints),
+        positions=len(prev_snapshot.positions),
     )
     return {
-        "snapshot": snapshot,
-        "degraded_mode": False,
-        "prev_snapshot": state.get("prev_snapshot"),
-        "constraints": state.get("constraints") or [],
+        "snapshot": prev_snapshot,
+        "prev_snapshot": prev_snapshot,
+        "degraded_mode": True,
+        "staleness": staleness,
+        "constraints": constraints,
         "technical_readings": state.get("technical_readings") or [],
         "info_gaps": state.get("info_gaps") or [],
     }
 
 
-def orchestrator_node(state: PortfolioState) -> dict:
-    """Orquestador mínimo F2: valida snapshot y rutea al Analista de Cartera.
+def _apply_echo_confirmation(
+    constraints: list[Constraint],
+    resume: dict[str, Any],
+    *,
+    store: PortfolioStore,
+) -> list[Constraint]:
+    """Aplica confirmación/revocación del echo-back; persiste altas y revokes (append-only)."""
+    action = resume.get("action", "confirm_all")
+    revoke_ids = {str(x) for x in resume.get("revoke_ids", [])}
+    confirm_ids = resume.get("confirm_ids")
+    confirm_set = {str(x) for x in confirm_ids} if confirm_ids is not None else None
 
-    Sin MCP todavía (F3): no lee BD ni hace echo-back de restricciones.
-    """
+    confirmed: list[Constraint] = []
+    for c in constraints:
+        cid = c.id or f"run:{c.ticker}:{c.rule}"
+        should_revoke = action == "revoke" or cid in revoke_ids
+        if action == "confirm" and confirm_set is not None and cid not in confirm_set:
+            should_revoke = True
+
+        if should_revoke:
+            if c.source == "db" and c.rule:
+                store.revoke_constraint(rule=c.rule, ticker=c.ticker)
+            # No entra a constraints activas de la corrida.
+            continue
+
+        # Confirmada.
+        if c.source == "run":
+            row = store.write_constraint(rule=c.rule, ticker=c.ticker, status="active")
+            confirmed.append(
+                Constraint(
+                    id=row["id"],
+                    rule=c.rule,
+                    ticker=c.ticker,
+                    status="active",
+                    source="echo",
+                    confirmed=True,
+                )
+            )
+        else:
+            confirmed.append(
+                Constraint(
+                    id=c.id,
+                    rule=c.rule,
+                    ticker=c.ticker,
+                    status="active",
+                    source="echo",
+                    confirmed=True,
+                )
+            )
+    return confirmed
+
+
+def orchestrator_node(state: PortfolioState, *, store: PortfolioStore) -> dict:
+    """Orquestador F3: echo-back de restricciones (HITL) antes de analizar."""
     run_id = state.get("run_id", "")
     snapshot = state.get("snapshot")
     if snapshot is None:
-        raise ValueError("Orquestador: falta snapshot; el parser debió poblarlo")
+        raise ValueError("Orquestador: falta snapshot; el intake debió poblarlo")
+
+    constraints = list(state.get("constraints") or [])
+    inputs = state["inputs"]
+    degraded = bool(state.get("degraded_mode", False))
+    staleness = state.get("staleness")
+
+    echo_payload = {
+        "type": "constraint_echo_back",
+        "run_id": run_id,
+        "degraded_mode": degraded,
+        "staleness": staleness.model_dump() if staleness else None,
+        "constraints": [c.model_dump() for c in constraints],
+        "prompt": (
+            "Confirmá las restricciones antes de analizar. "
+            "Resume con {action: confirm_all} o "
+            "{action: confirm, revoke_ids: [...], confirm_ids: [...]}."
+        ),
+    }
+
+    if constraints:
+        if inputs.auto_confirm_constraints:
+            resume: dict[str, Any] = {"action": "confirm_all"}
+            log_json(logger, "orchestrator_echo_auto", run_id=run_id, n=len(constraints))
+        else:
+            log_json(
+                logger,
+                "orchestrator_echo_interrupt",
+                run_id=run_id,
+                n=len(constraints),
+            )
+            raw = interrupt(echo_payload)
+            resume = raw if isinstance(raw, dict) else {"action": "confirm_all"}
+        confirmed = _apply_echo_confirmation(constraints, resume, store=store)
+    else:
+        confirmed = []
+        log_json(logger, "orchestrator_echo_empty", run_id=run_id)
 
     log_json(
         logger,
         "orchestrator_route",
         run_id=run_id,
         next="analista_cartera",
-        degraded_mode=bool(state.get("degraded_mode", False)),
-        constraints_count=len(state.get("constraints") or []),
+        degraded_mode=degraded,
+        constraints_count=len(confirmed),
+        block_fine_quantities=bool(staleness and staleness.block_fine_quantities),
         positions=len(snapshot.positions),
     )
-    # F2: sin echo-back HITL ni store; solo confirma el camino feliz.
     return {
-        "constraints": state.get("constraints") or [],
-        "degraded_mode": False,
+        "constraints": confirmed,
+        "degraded_mode": degraded,
+        "staleness": staleness,
     }
 
 
@@ -238,3 +443,100 @@ def _assert_full_coverage_after_materialize(snapshot: Snapshot, clusters: list) 
         raise ClusterCoverageError(
             f"Clustering incompleto tras materializar; faltan tickers: {sorted(missing)}"
         )
+
+
+def _build_report_stub(state: PortfolioState) -> str:
+    run_id = state.get("run_id", "")
+    degraded = bool(state.get("degraded_mode", False))
+    staleness = state.get("staleness")
+    diagnosis = state.get("diagnosis")
+    constraints = state.get("constraints") or []
+    snapshot = state.get("snapshot")
+
+    lines = [
+        "# Informe stub (F3)",
+        "",
+        f"run_id: {run_id}",
+        f"degraded_mode: {degraded}",
+    ]
+    if staleness is not None:
+        lines.extend(
+            [
+                "",
+                "## Staleness",
+                staleness.warning,
+                f"block_fine_quantities: {staleness.block_fine_quantities}",
+                f"snapshot_id: {staleness.snapshot_id}",
+            ]
+        )
+    if snapshot is not None:
+        lines.extend(
+            [
+                "",
+                "## Snapshot",
+                f"positions: {len(snapshot.positions)}",
+                f"total_ars: {snapshot.total_ars}",
+                f"mep_implied: {snapshot.mep_implied}",
+            ]
+        )
+    if constraints:
+        lines.append("")
+        lines.append("## Restricciones confirmadas")
+        for c in constraints:
+            lines.append(f"- [{c.status}] {c.rule}" + (f" ({c.ticker})" if c.ticker else ""))
+    if diagnosis is not None:
+        lines.extend(
+            [
+                "",
+                "## Diagnóstico (borrador)",
+                diagnosis.structural_diagnosis,
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "---",
+            "Descargo: este sistema no ejecuta órdenes ni constituye asesoramiento financiero.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def persist_node(state: PortfolioState, *, store: PortfolioStore) -> dict:
+    """Persistencia al final: snapshot nuevo si hubo .xlsx + informe-stub siempre."""
+    run_id = state.get("run_id", "")
+    inputs = state["inputs"]
+    degraded = bool(state.get("degraded_mode", False))
+    snapshot = state.get("snapshot")
+    report_md = _build_report_stub(state)
+
+    snapshot_meta = None
+    if not degraded and inputs.xlsx_path and snapshot is not None:
+        snapshot_meta = store.write_snapshot(
+            snapshot_to_store_dict(snapshot),
+            source=inputs.xlsx_path,
+        )
+        log_json(
+            logger,
+            "persist_snapshot",
+            run_id=run_id,
+            snapshot_id=snapshot_meta["id"],
+            source=snapshot_meta["source"],
+        )
+    else:
+        log_json(
+            logger,
+            "persist_snapshot_skipped",
+            run_id=run_id,
+            reason="degraded_mode" if degraded else "no_xlsx_or_snapshot",
+        )
+
+    report_meta = store.write_report(run_id=run_id, content_md=report_md)
+    log_json(
+        logger,
+        "persist_report",
+        run_id=run_id,
+        report_id=report_meta["id"],
+        snapshot_written=snapshot_meta is not None,
+    )
+    return {"report": report_md}
