@@ -9,7 +9,12 @@ PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 REPO_ROOT = PACKAGE_ROOT.parent.parent
 CONFIG_DIR = Path(__file__).resolve().parent
 MODELS_YAML = Path(os.environ.get("PORTFOLIOSENTINEL_MODELS_YAML", CONFIG_DIR / "models.yaml"))
+GUARDRAILS_YAML = Path(
+    os.environ.get("PORTFOLIOSENTINEL_GUARDRAILS_YAML", CONFIG_DIR / "guardrails.yaml")
+)
 DEFAULT_FIXTURE_XLSX = REPO_ROOT / "fixtures" / "estadocuenta-sintetico.xlsx"
+DEFAULT_IMAGES_DIR = REPO_ROOT / "fixtures" / "images"
+ML_ARTIFACT_DIR = REPO_ROOT / "artifacts" / "ml" / "trend"
 # Checkpointer (ejecución) ≠ store de dominio (ADR-0003): dos SQLite distintas.
 DEFAULT_CHECKPOINT_DB = REPO_ROOT / "data" / "checkpoints.sqlite"
 DEFAULT_DOMAIN_DB = Path(

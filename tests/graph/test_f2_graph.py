@@ -109,6 +109,8 @@ def test_checkpoint_after_intake(tmp_path: Path, snapshot):
             interrupt_after=["intake"],
             include_cartera=False,
             include_mercado=False,
+            include_tecnico=False,
+            include_planificador=False,
         )
         config = {"configurable": {"thread_id": thread_id}}
         result = graph.invoke(

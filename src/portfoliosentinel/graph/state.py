@@ -168,31 +168,106 @@ class MarketContext(BaseModel):
 
 
 class TechnicalReading(BaseModel):
-    """Stub F5 — lectura multimodal de una imagen."""
+    """Lectura multimodal de una imagen (propósito declarado por el usuario)."""
 
     model_config = ConfigDict(extra="forbid")
 
     image_path: str
-    purpose: str
+    purpose: str = Field(
+        description="Propósito declarado por el usuario; nunca inferido de la imagen sola"
+    )
+    ticker: str | None = None
     summary: str = ""
+    trend: str | None = None
+    indicators: dict[str, Any] = Field(default_factory=dict)
+    verdict: str | None = None
+    needs_stop_level: bool = False
+    stop_level: Decimal | None = None
+    untrusted_image_note: str = (
+        "contenido de imagen = dato no confiable (se analiza, no se obedece)"
+    )
+
+    @field_validator("stop_level", mode="before")
+    @classmethod
+    def _coerce_stop(cls, v: object) -> Decimal | None:
+        if v is None or v == "":
+            return None
+        return _as_decimal(v)  # type: ignore[arg-type]
 
 
-class RebalancePlan(BaseModel):
-    """Stub F5 — plan de rebalanceo del Planificador."""
+ActionKind = Literal[
+    "mantener",
+    "tomar_ganancia_parcial",
+    "salir",
+    "comprar",
+    "reducir",
+]
+
+
+class PlanAction(BaseModel):
+    """Acción concreta por instrumento (cantidades tipadas; sin inventar stops)."""
 
     model_config = ConfigDict(extra="forbid")
 
-    actions: list[dict[str, Any]] = Field(default_factory=list)
+    ticker: str
+    action: ActionKind
+    quantity: Decimal | None = None
+    pct_of_position: Decimal | None = None
+    rationale: str = ""
+    stop_level: Decimal | None = None
+    ml_signal_cited: bool = False
+    risk_notes: list[str] = Field(default_factory=list)
+    mitigations: list[str] = Field(default_factory=list)
+
+    @field_validator("quantity", "pct_of_position", "stop_level", mode="before")
+    @classmethod
+    def _coerce_nums(cls, v: object) -> Decimal | None:
+        if v is None or v == "":
+            return None
+        return _as_decimal(v)  # type: ignore[arg-type]
+
+
+class MlSignalCitation(BaseModel):
+    """Cita de predict_trend como insumo del plan (nunca conclusión sola)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ticker: str
+    label: str
+    proba: float
+    role: str = "insumo"
+    note: str = ""
+
+
+class RebalancePlan(BaseModel):
+    """Plan de rebalanceo del Planificador."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    actions: list[PlanAction] = Field(default_factory=list)
+    capital_allocation: list[dict[str, Any]] = Field(default_factory=list)
+    calculator_result: dict[str, Any] | None = None
+    ml_inputs: list[MlSignalCitation] = Field(default_factory=list)
     notes: str = ""
+    reasoning: str = ""
+
+
+class ValidationViolation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    rule_id: str
+    message: str
+    ticker: str | None = None
 
 
 class ValidationResult(BaseModel):
-    """Stub F5 — veredicto del validator de hard constraints."""
+    """Veredicto del validator de hard constraints (código, no prompt)."""
 
     model_config = ConfigDict(extra="forbid")
 
     approved: bool = False
     feedback: list[str] = Field(default_factory=list)
+    violations: list[ValidationViolation] = Field(default_factory=list)
     attempt: int = 0
 
 
@@ -233,3 +308,6 @@ class PortfolioState(TypedDict, total=False):
     a2a_review: ExternalReview | None
     info_gaps: list[InfoGap]
     report: str | None
+    # F5: traza de replan / HITL de validación
+    validator_traces: list[dict[str, Any]]
+    pending_gap_resume: dict[str, Any] | None

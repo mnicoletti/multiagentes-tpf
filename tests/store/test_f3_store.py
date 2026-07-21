@@ -99,6 +99,8 @@ def test_two_consecutive_runs_two_snapshots_two_reports(tmp_path: Path):
             store=store,
             include_cartera=False,
             include_mercado=False,
+            include_tecnico=False,
+            include_planificador=False,
         )
         for i in range(2):
             run_id = f"run-{i}-{uuid.uuid4().hex[:8]}"
@@ -175,7 +177,12 @@ def test_degraded_mode_loads_previous_snapshot_with_staleness(tmp_path: Path):
         # Semilla: una corrida con .xlsx persiste snapshot.
         seed_id = f"seed-{uuid.uuid4().hex[:8]}"
         graph = build_graph(
-            checkpointer=checkpointer, store=store, include_cartera=False, include_mercado=False
+            checkpointer=checkpointer,
+            store=store,
+            include_cartera=False,
+            include_mercado=False,
+            include_tecnico=False,
+            include_planificador=False,
         )
         graph.invoke(
             _initial_state(xlsx=str(FIXTURE), run_id=seed_id),
@@ -217,7 +224,12 @@ def test_echo_back_persists_new_constraint_and_requires_confirmation(tmp_path: P
     try:
         run_id = f"c-{uuid.uuid4().hex[:8]}"
         graph = build_graph(
-            checkpointer=checkpointer, store=store, include_cartera=False, include_mercado=False
+            checkpointer=checkpointer,
+            store=store,
+            include_cartera=False,
+            include_mercado=False,
+            include_tecnico=False,
+            include_planificador=False,
         )
         result = graph.invoke(
             _initial_state(

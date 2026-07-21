@@ -732,6 +732,40 @@ def _build_report_stub(state: PortfolioState) -> str:
             lines.append("### Citas")
             for c in market_context.citations:
                 lines.append(f"- [{c.get('source_id')}] {c.get('note')}")
+    plan = state.get("plan")
+    if plan is not None:
+        lines.extend(["", "## Plan de rebalanceo (F5)"])
+        lines.append(plan.reasoning or plan.notes or "")
+        for a in plan.actions:
+            lines.append(
+                f"- {a.ticker}: {a.action}"
+                + (f" qty={a.quantity}" if a.quantity is not None else "")
+                + (f" stop={a.stop_level}" if a.stop_level is not None else "")
+            )
+        if plan.ml_inputs:
+            lines.append("")
+            lines.append("### Insumos predict_trend")
+            for m in plan.ml_inputs:
+                lines.append(f"- {m.ticker}: {m.note}")
+    validation = state.get("validation")
+    if validation is not None:
+        lines.extend(
+            [
+                "",
+                "## Validación",
+                f"approved={validation.approved} attempt={validation.attempt}",
+            ]
+        )
+        for fb in validation.feedback:
+            lines.append(f"- {fb}")
+    gaps = state.get("info_gaps") or []
+    if gaps:
+        lines.append("")
+        lines.append("## Info gaps")
+        for g in gaps:
+            detail = g.detail if hasattr(g, "detail") else g.get("detail")
+            ticker = g.ticker if hasattr(g, "ticker") else g.get("ticker")
+            lines.append(f"- {ticker}: {detail}")
     lines.extend(
         [
             "",

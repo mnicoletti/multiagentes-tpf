@@ -1,0 +1,35 @@
+# Templates de guardrails — capa de salida determinista (SPEC §8.3, ADR-0006).
+# El validator de hard constraints lee estas reglas; NO van a prompts.
+
+rules:
+  - id: no-sell-restricted
+    type: hard_constraint
+    description: >
+      Prohibido recomendar vender (salir / tomar_ganancia_parcial / reducir)
+      un ticker con restricción activa "no vender".
+    params:
+      tickers_from: constraints_db
+      blocked_actions:
+        - salir
+        - tomar_ganancia_parcial
+        - reducir
+
+  - id: qty-within-holdings
+    type: hard_constraint
+    description: >
+      Cantidad recomendada a vender/reducir no puede superar la tenencia
+      del snapshot (fuente de verdad).
+    params:
+      compare: quantity_lte_holding
+
+# Linter de informe (F6) — declaradas acá para continuidad; F5 no las aplica al plan.
+report_rules:
+  - id: disclaimer-present
+    type: report_linter
+  - id: no-execution-language
+    type: report_linter
+  - id: report-structure
+    type: report_linter
+
+validator:
+  max_retries: 2  # reintentos al Planificador; al tercero → interrupt() HITL

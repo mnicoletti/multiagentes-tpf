@@ -11,6 +11,8 @@ install:
 	.venv/bin/pip install -U pip
 	.venv/bin/pip install -e ".[dev]"
 	.venv/bin/python scripts/build_synthetic_fixture.py
+	.venv/bin/python scripts/train_trend_model.py
+	.venv/bin/python scripts/build_image_fixtures.py
 
 lint:
 	$(PYTHON) -m ruff check src tests scripts mcp_servers

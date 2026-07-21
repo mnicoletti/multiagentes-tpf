@@ -141,6 +141,8 @@ def test_persisted_report_stub_indexed_and_retrievable(tmp_path: Path):
             chroma_dir=chroma,
             include_cartera=False,
             include_mercado=True,
+            include_tecnico=False,
+            include_planificador=False,
             mercado_skip_llm=True,
         )
         run_id = f"f4-{uuid.uuid4().hex[:8]}"
@@ -189,6 +191,8 @@ def test_full_run_fixture_mode_zero_market_http(tmp_path: Path):
             chroma_dir=chroma,
             include_cartera=False,
             include_mercado=True,
+            include_tecnico=False,
+            include_planificador=False,
             mercado_skip_llm=True,
         )
         run_id = f"f4net-{uuid.uuid4().hex[:8]}"

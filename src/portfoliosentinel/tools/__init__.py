@@ -1,4 +1,4 @@
-"""Tools deterministas: parser, (futuro) calc, ml, guardrails."""
+"""Tools deterministas: parser, (calc/ml/guardrails se importan por módulo)."""
 
 from portfoliosentinel.tools.exceptions import (
     MalformedStatementError,

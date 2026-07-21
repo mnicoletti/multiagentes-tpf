@@ -1,0 +1,21 @@
+{
+  "name": "predict_trend",
+  "version": "1.0.0",
+  "algorithm": "LogisticRegression (multinomial) + StandardScaler",
+  "labels": [
+    "down",
+    "sideways",
+    "up"
+  ],
+  "feature_names": [
+    "rsi_14",
+    "macd_hist",
+    "sma_slope",
+    "return_5d",
+    "volume_z"
+  ],
+  "training_data": "Dataset sintético (360 filas) con reglas de indicadores: RSI/MACD/sma_slope/return_5d/volume_z → up|down|sideways. No usa datos de mercado reales ni PII.",
+  "train_accuracy_in_sample": 1.0,
+  "intended_use": "Insumo del Planificador de Rebalanceo. Nunca decisión autónoma ni sustituto de stops/restricciones.",
+  "artifact": "artifacts/ml/trend/logreg_trend.joblib"
+}
