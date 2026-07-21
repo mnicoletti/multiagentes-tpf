@@ -7,6 +7,7 @@ from typing import Any, Literal
 
 from portfoliosentinel.config.settings import DEFAULT_CHROMA_DIR
 from portfoliosentinel.rag.store import (
+    CHROMA_IO_LOCK,
     COLLECTION_KNOWLEDGE,
     COLLECTION_REPORTS,
     get_chroma_client,
@@ -24,27 +25,28 @@ def retrieve(
     persist_dir: str | Path | None = None,
 ) -> list[dict[str, Any]]:
     """Devuelve hits con id, document, metadata, distance."""
-    client = get_chroma_client(persist_dir or DEFAULT_CHROMA_DIR)
-    name = COLLECTION_KNOWLEDGE if collection == "knowledge" else COLLECTION_REPORTS
-    coll = get_collection(name, client=client)
-    if coll.count() == 0:
-        return []
-    raw = coll.query(query_texts=[query], n_results=min(n_results, max(coll.count(), 1)))
-    ids = (raw.get("ids") or [[]])[0]
-    docs = (raw.get("documents") or [[]])[0]
-    metas = (raw.get("metadatas") or [[]])[0]
-    dists = (raw.get("distances") or [[]])[0]
-    out: list[dict[str, Any]] = []
-    for i, doc_id in enumerate(ids):
-        out.append(
-            {
-                "id": doc_id,
-                "document": docs[i] if i < len(docs) else "",
-                "metadata": metas[i] if i < len(metas) else {},
-                "distance": dists[i] if i < len(dists) else None,
-            }
-        )
-    return out
+    with CHROMA_IO_LOCK:
+        client = get_chroma_client(persist_dir or DEFAULT_CHROMA_DIR)
+        name = COLLECTION_KNOWLEDGE if collection == "knowledge" else COLLECTION_REPORTS
+        coll = get_collection(name, client=client)
+        if coll.count() == 0:
+            return []
+        raw = coll.query(query_texts=[query], n_results=min(n_results, max(coll.count(), 1)))
+        ids = (raw.get("ids") or [[]])[0]
+        docs = (raw.get("documents") or [[]])[0]
+        metas = (raw.get("metadatas") or [[]])[0]
+        dists = (raw.get("distances") or [[]])[0]
+        out: list[dict[str, Any]] = []
+        for i, doc_id in enumerate(ids):
+            out.append(
+                {
+                    "id": doc_id,
+                    "document": docs[i] if i < len(docs) else "",
+                    "metadata": metas[i] if i < len(metas) else {},
+                    "distance": dists[i] if i < len(dists) else None,
+                }
+            )
+        return out
 
 
 def format_hits_as_untrusted_context(hits: list[dict[str, Any]]) -> str:

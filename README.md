@@ -20,6 +20,9 @@ make test             # parser + grafo + store F3 (sin LLM)
 # Local con Ollama (sin API paga):
 make run MODELS_YAML=src/portfoliosentinel/config/models.ollama.yaml
 
+# Gemini API (Google AI Studio; requiere GOOGLE_API_KEY):
+make run MODELS_YAML=src/portfoliosentinel/config/models.gemini.yaml
+
 # Modo degradado (sin .xlsx; usa último snapshot del store de dominio):
 .venv/bin/python -m portfoliosentinel.cli run --no-xlsx --confirm-constraints
 ```

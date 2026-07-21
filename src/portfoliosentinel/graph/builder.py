@@ -1,4 +1,4 @@
-"""Compilación del grafo F5: cartera → (mercado ∥ técnico) → plan → validator → HITL → persist."""
+"""Compilación del grafo F5: cartera → mercado → técnico → plan → validator → HITL → persist."""
 
 from __future__ import annotations
 
@@ -106,16 +106,22 @@ def build_graph(
         prev = "analista_cartera"
 
     if include_mercado and include_tecnico:
-        # Fan-out Mercado ∥ Técnico (SPEC §4.3)
+        # Secuencial (no fan-out paralelo): chromadb PersistentClient no es
+        # thread-safe ante dos opens concurrentes (crash RustBindingsAPI).
+        # Orden: mercado → técnico → planificador. Equivalente funcional a
+        # SPEC §4.3 sin carrera sobre el store embebido.
         graph.add_edge(prev, "analista_mercado")
-        graph.add_edge(prev, "analista_tecnico")
-        analysis_nodes = ["analista_mercado", "analista_tecnico"]
+        graph.add_edge("analista_mercado", "analista_tecnico")
+        analysis_nodes = ["analista_tecnico"]
+        prev = "analista_tecnico"
     elif include_mercado:
         graph.add_edge(prev, "analista_mercado")
         analysis_nodes = ["analista_mercado"]
+        prev = "analista_mercado"
     elif include_tecnico:
         graph.add_edge(prev, "analista_tecnico")
         analysis_nodes = ["analista_tecnico"]
+        prev = "analista_tecnico"
 
     if include_planificador:
         if analysis_nodes:

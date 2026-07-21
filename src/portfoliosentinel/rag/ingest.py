@@ -102,5 +102,8 @@ def ensure_knowledge_ingested(
     persist_dir: str | Path | None = None,
     knowledge_dir: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Idempotente: (re)ingesta el corpus estático."""
-    return ingest_knowledge(knowledge_dir, persist_dir=persist_dir)
+    """Idempotente: (re)ingesta el corpus estático (bajo lock de Chroma)."""
+    from portfoliosentinel.rag.store import CHROMA_IO_LOCK
+
+    with CHROMA_IO_LOCK:
+        return ingest_knowledge(knowledge_dir, persist_dir=persist_dir)

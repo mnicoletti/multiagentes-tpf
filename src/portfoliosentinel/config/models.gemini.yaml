@@ -1,0 +1,57 @@
+# Override para Gemini API (Google AI Studio / free tier).
+# Uso:
+#   export GOOGLE_API_KEY=...
+#   export PORTFOLIOSENTINEL_MODELS_YAML=src/portfoliosentinel/config/models.gemini.yaml
+#   make run
+#
+# tecnico usa Flash multimodal (visión de paneles/gráficos).
+# Si un model id deja de existir en AI Studio, cambiá solo este YAML.
+
+roles:
+  orquestador:
+    provider: google_genai
+    model: gemini-2.0-flash
+    params:
+      temperature: 0
+
+  cartera:
+    provider: google_genai
+    model: gemini-2.0-flash
+    params:
+      temperature: 0
+
+  mercado:
+    provider: google_genai
+    model: gemini-2.0-flash
+    params:
+      temperature: 0
+
+  tecnico:
+    provider: google_genai
+    model: gemini-2.0-flash
+    params:
+      temperature: 0
+
+  planificador:
+    provider: google_genai
+    model: gemini-2.0-flash
+    params:
+      temperature: 0
+
+  redactor:
+    provider: google_genai
+    model: gemini-2.0-flash
+    params:
+      temperature: 0
+
+  judge:
+    provider: google_genai
+    model: gemini-2.0-flash
+    params:
+      temperature: 0
+
+  a2a:
+    provider: google_genai
+    model: gemini-2.0-flash
+    params:
+      temperature: 0
