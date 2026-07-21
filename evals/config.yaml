@@ -1,0 +1,14 @@
+# Criterios de aceptación F7 (ADR-0007). Prohibido bajar umbrales: iterar prompts.
+acceptance:
+  judge_min_avg: 4.0
+  deterministic_pass_rate: 1.0
+  max_cost_usd_per_run: 1.0
+
+judge:
+  prompt_version: v1
+  # Config DISTINTA de los agentes (evals/judge/models.yaml — no models.yaml del sistema).
+  models_yaml: judge/models.yaml
+
+metrics:
+  # Con Ollama local el costo es 0; LangSmith aporta costo real si está configurado.
+  cost_source: local_or_langsmith

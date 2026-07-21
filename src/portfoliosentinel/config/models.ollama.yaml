@@ -38,6 +38,7 @@ roles:
     params:
       temperature: 0
 
+  # Nota F7: evals usan evals/judge/models.yaml (gemma4:12b), no este rol.
   judge:
     provider: ollama
     model: qwen3:8b

@@ -15,8 +15,8 @@ install:
 	.venv/bin/python scripts/build_image_fixtures.py
 
 lint:
-	$(PYTHON) -m ruff check src tests scripts mcp_servers
-	$(PYTHON) -m ruff format --check src tests scripts mcp_servers
+	$(PYTHON) -m ruff check src tests scripts mcp_servers evals
+	$(PYTHON) -m ruff format --check src tests scripts mcp_servers evals
 
 run:
 	@if [ -n "$(MODELS_YAML)" ]; then \
@@ -33,8 +33,7 @@ ingest-knowledge:
 	MARKET_FIXTURE=1 $(PYTHON) -c "from portfoliosentinel.rag.ingest import ingest_knowledge; print(ingest_knowledge())"
 
 eval:
-	@echo "make eval: stub — el harness de evals se implementa en F7"
-	@exit 1
+	MARKET_FIXTURE=1 $(PYTHON) scripts/run_evals.py
 
 demo:
 	@echo "make demo: stub — la demo end-to-end se completa en F8"

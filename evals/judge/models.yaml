@@ -1,0 +1,13 @@
+# Config del JUDGE — DISTINTA de config/models.yaml de los agentes (ADR-0007).
+# El harness carga SOLO este archivo vía get_judge_model(); nunca reusa instancias
+# de cartera/mercado/planificador/redactor.
+#
+# Demo Anthropic: Sonnet t=0 (SPEC §9). Sin API key: Ollama gemma4:12b (modelo
+# distinto de qwen3:8b usado por agentes en models.ollama.yaml).
+
+roles:
+  judge:
+    provider: ollama
+    model: gemma4:12b
+    params:
+      temperature: 0

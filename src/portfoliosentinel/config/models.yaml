@@ -39,6 +39,8 @@ roles:
     params:
       temperature: 0
 
+  # Nota F7: el harness de evals NO usa este bloque. El judge carga
+  # exclusivamente evals/judge/models.yaml (config distinta, ADR-0007).
   judge:
     provider: anthropic
     model: claude-sonnet-4-5-20250929
