@@ -20,3 +20,22 @@ DEFAULT_DOMAIN_DB = Path(
 )
 
 INVESTOR_ALIAS = "INV-001"
+
+# F4 — market-data + RAG
+DEFAULT_CHROMA_DIR = Path(
+    os.environ.get("PORTFOLIOSENTINEL_CHROMA_DIR", REPO_ROOT / "data" / "chroma")
+)
+KNOWLEDGE_DIR = Path(os.environ.get("PORTFOLIOSENTINEL_KNOWLEDGE_DIR", REPO_ROOT / "knowledge"))
+MARKET_FIXTURE_DIR = Path(os.environ.get("MARKET_FIXTURE_DIR", REPO_ROOT / "fixtures" / "market"))
+WEB_FIXTURE_PATH = Path(
+    os.environ.get(
+        "PORTFOLIOSENTINEL_WEB_FIXTURE",
+        REPO_ROOT / "fixtures" / "web" / "search_default.json",
+    )
+)
+# Divergencia relativa MEP implícito vs API/fixture (porcentaje). Configurable.
+MEP_DIVERGENCE_THRESHOLD_PCT = float(os.environ.get("MEP_DIVERGENCE_THRESHOLD_PCT", "2.0"))
+
+
+def market_fixture_enabled() -> bool:
+    return os.environ.get("MARKET_FIXTURE", "0").lower() in {"1", "true", "yes"}

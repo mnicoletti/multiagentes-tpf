@@ -1,4 +1,4 @@
-"""CLI de PortfolioSentinel — corrida F3 con store de dominio + checkpointer."""
+"""CLI de PortfolioSentinel — corrida F4 con market-data + RAG + store."""
 
 from __future__ import annotations
 
@@ -113,6 +113,9 @@ def _print_interrupt_payload(payload: Any) -> None:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
+    if getattr(args, "market_fixture", False):
+        os.environ["MARKET_FIXTURE"] = "1"
+
     xlsx: Path | None
     if args.no_xlsx:
         xlsx = None
@@ -189,6 +192,16 @@ def cmd_run(args: argparse.Namespace) -> int:
         if result.get("report"):
             print("\n--- Informe stub persistido ---", flush=True)
             print(result["report"], flush=True)
+        mc = result.get("market_context")
+        if mc is not None:
+            print("\n=== Contexto de mercado ===", flush=True)
+            print(mc.summary, flush=True)
+            if mc.mep_warning:
+                print(f"\n[WARNING MEP] {mc.mep_warning}", flush=True)
+            if mc.citations:
+                print("Citas:", flush=True)
+                for c in mc.citations:
+                    print(f"  - [{c.get('source_id')}] {c.get('note')}", flush=True)
         if _langsmith_configured():
             print("\n[observabilidad] LangSmith configurado (env vars presentes).")
         else:
@@ -292,7 +305,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="portfoliosentinel", description="PortfolioSentinel CLI")
     sub = p.add_subparsers(dest="command", required=True)
 
-    run = sub.add_parser("run", help="Corrida: intake → orquestador → cartera → persist")
+    run = sub.add_parser("run", help="Corrida: intake → orquestador → cartera → mercado → persist")
     run.add_argument("--xlsx", type=str, default=str(DEFAULT_FIXTURE_XLSX))
     run.add_argument(
         "--no-xlsx",
@@ -313,6 +326,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--confirm-constraints",
         action="store_true",
         help="Auto-confirma el echo-back (sin interrupt HITL)",
+    )
+    run.add_argument(
+        "--market-fixture",
+        action="store_true",
+        help="MARKET_FIXTURE=1: FX/quotes/web desde disco (sin red salvo LLM)",
     )
     run.add_argument(
         "--stop-after",

@@ -1,0 +1,15 @@
+{
+  "as_of": "2026-07-15T18:00:00Z",
+  "source": "fixture",
+  "currency": "ARS",
+  "quotes": {
+    "GGAL": {"last": 6400.0, "bid": 6380.0, "ask": 6420.0, "change_pct": -0.8},
+    "YPFD": {"last": 25000.0, "bid": 24950.0, "ask": 25050.0, "change_pct": 1.2},
+    "AL30": {"last": 7500.0, "bid": 7480.0, "ask": 7520.0, "change_pct": 0.3},
+    "GD30": {"last": 8000.0, "bid": 7980.0, "ask": 8020.0, "change_pct": 0.1},
+    "AAPL": {"last": 20000.0, "bid": 19950.0, "ask": 20050.0, "change_pct": -0.2},
+    "MELI": {"last": 30000.0, "bid": 29900.0, "ask": 30100.0, "change_pct": 0.5},
+    "VIST": {"last": 10000.0, "bid": 9950.0, "ask": 10050.0, "change_pct": 2.1},
+    "SPY": {"last": 20000.0, "bid": 19980.0, "ask": 20020.0, "change_pct": 0.0}
+  }
+}

@@ -4,48 +4,48 @@
 roles:
   orquestador:
     provider: ollama
-    model: gemma4:12b
+    model: qwen3:8b
     params:
       temperature: 0
 
   cartera:
     provider: ollama
-    model: gemma4:12b
+    model: qwen3:8b
     params:
       temperature: 0
 
   mercado:
     provider: ollama
-    model: gemma4:12b
+    model: qwen3:8b
     params:
       temperature: 0
 
   tecnico:
     provider: ollama
-    model: gemma4:12b
+    model: qwen3:8b
     params:
       temperature: 0
 
   planificador:
     provider: ollama
-    model: gemma4:12b
+    model: qwen3:8b
     params:
       temperature: 0
 
   redactor:
     provider: ollama
-    model: gemma4:12b
+    model: qwen3:8b
     params:
       temperature: 0
 
   judge:
     provider: ollama
-    model: gemma4:12b
+    model: qwen3:8b
     params:
       temperature: 0
 
   a2a:
     provider: ollama
-    model: gemma4:12b
+    model: qwen3:8b
     params:
       temperature: 0

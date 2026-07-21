@@ -1,4 +1,4 @@
-"""Nodos del grafo: intake → orquestador → analista_cartera → persist (F3)."""
+"""Nodos del grafo: intake → orquestador → cartera → mercado → persist (F4)."""
 
 from __future__ import annotations
 
@@ -6,22 +6,31 @@ import json
 import re
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.types import interrupt
 
+from mcp_servers.market_data.client import get_fx_rates, get_quotes
 from mcp_servers.portfolio_store.db import PortfolioStore
 from portfoliosentinel.agents.cartera import CarteraLLMOutput
+from portfoliosentinel.agents.mercado import MercadoCitation, MercadoLLMOutput
 from portfoliosentinel.agents.prompts.cartera import (
     CARTERA_SYSTEM_PROMPT,
     build_cartera_user_message,
 )
+from portfoliosentinel.agents.prompts.mercado import (
+    MERCADO_SYSTEM_PROMPT,
+    build_mercado_user_message,
+)
 from portfoliosentinel.config.models import get_chat_model
+from portfoliosentinel.config.settings import DEFAULT_CHROMA_DIR
 from portfoliosentinel.graph.logging_utils import get_node_logger, log_json
 from portfoliosentinel.graph.state import (
     Constraint,
     Diagnosis,
+    MarketContext,
     PortfolioState,
     Snapshot,
     StalenessInfo,
@@ -32,11 +41,15 @@ from portfoliosentinel.graph.weights import (
     compute_position_weights,
     materialize_clusters,
 )
+from portfoliosentinel.rag.ingest import ensure_knowledge_ingested, ingest_report
+from portfoliosentinel.rag.retriever import format_hits_as_untrusted_context, retrieve
+from portfoliosentinel.tools.mep_check import check_mep_divergence, mep_mid_from_fx
 from portfoliosentinel.tools.parser import parse_account_statement
 from portfoliosentinel.tools.portfolio_store import (
     snapshot_from_store_dict,
     snapshot_to_store_dict,
 )
+from portfoliosentinel.tools.web_search import web_search
 
 logger = get_node_logger("portfoliosentinel.graph.nodes")
 
@@ -445,16 +458,228 @@ def _assert_full_coverage_after_materialize(snapshot: Snapshot, clusters: list) 
         )
 
 
+def _parse_mercado_json(raw: str) -> MercadoLLMOutput:
+    text = raw.strip()
+    fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, flags=re.DOTALL)
+    if fence:
+        text = fence.group(1)
+    else:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start >= 0 and end > start:
+            text = text[start : end + 1]
+    return MercadoLLMOutput.model_validate(json.loads(text))
+
+
+def _invoke_mercado_llm(model: object, user_msg: str) -> MercadoLLMOutput:
+    llm_out: MercadoLLMOutput | None = None
+    try:
+        structured = model.with_structured_output(MercadoLLMOutput)  # type: ignore[attr-defined]
+        result = structured.invoke(
+            [
+                SystemMessage(content=MERCADO_SYSTEM_PROMPT),
+                HumanMessage(content=user_msg),
+            ]
+        )
+        if isinstance(result, MercadoLLMOutput):
+            llm_out = result
+        elif isinstance(result, dict):
+            llm_out = MercadoLLMOutput.model_validate(result)
+    except Exception as exc:  # noqa: BLE001
+        log_json(logger, "mercado_structured_fallback", error=str(exc))
+
+    if llm_out is None:
+        raw = model.invoke(  # type: ignore[attr-defined]
+            [
+                SystemMessage(content=MERCADO_SYSTEM_PROMPT),
+                HumanMessage(
+                    content=user_msg + "\n\nRespondé ÚNICAMENTE un JSON con keys: "
+                    "summary, instrument_notes, citations, narrative_delta."
+                ),
+            ]
+        )
+        content = raw.content if hasattr(raw, "content") else str(raw)
+        if isinstance(content, list):
+            content = "".join(
+                block.get("text", "") if isinstance(block, dict) else str(block)
+                for block in content
+            )
+        llm_out = _parse_mercado_json(str(content))
+    return llm_out
+
+
+def _mercado_fallback_summary(
+    *,
+    as_of: str,
+    mep_check: dict[str, Any],
+    knowledge_ids: list[str],
+    web_queries: list[str],
+) -> MercadoLLMOutput:
+    """Síntesis determinista sin LLM (tests / include_mercado stub path)."""
+    warn = mep_check.get("mep_warning")
+    summary = (
+        f"Contexto de mercado al {as_of}: FX y quotes vía market-data; "
+        f"retrieval knowledge={knowledge_ids}; web_queries={web_queries}."
+    )
+    if warn:
+        summary += f" WARNING MEP: {warn}"
+    citations = [
+        MercadoCitation(source_id="market-data", note="FX y quotes de la corrida"),
+        *[
+            MercadoCitation(source_id=kid, note="documento knowledge recuperado")
+            for kid in knowledge_ids[:5]
+        ],
+    ]
+    return MercadoLLMOutput(
+        summary=summary,
+        instrument_notes=[],
+        citations=citations,
+        narrative_delta="",
+    )
+
+
+def analista_mercado_node(
+    state: PortfolioState,
+    *,
+    chroma_dir: str | Path | None = None,
+    skip_llm: bool = False,
+) -> dict:
+    """Analista de Mercado: market-data + web search nativa + RAG + verificación MEP."""
+    run_id = state.get("run_id", "")
+    snapshot = state.get("snapshot")
+    if snapshot is None:
+        raise ValueError("Analista de Mercado: falta snapshot")
+
+    persist = Path(chroma_dir) if chroma_dir else DEFAULT_CHROMA_DIR
+    ensure_knowledge_ingested(persist_dir=persist)
+
+    tickers = [p.ticker for p in snapshot.positions]
+    fx = get_fx_rates()
+    quotes = get_quotes(tickers)
+    mep_market = mep_mid_from_fx(fx)
+    mep_check = check_mep_divergence(snapshot.mep_implied, mep_market)
+
+    today = date.today()
+    as_of = today.isoformat()
+    web_queries = [
+        f"Mercado argentino acciones CEDEARS {as_of}",
+        f"Dólar MEP CCL Argentina {as_of}",
+    ]
+    # Query extra por el ticker más pesado (concentración).
+    if tickers:
+        top = max(snapshot.positions, key=lambda p: p.total)
+        web_queries.append(f"{top.ticker} cotización panel local {as_of}")
+
+    web_blocks: list[str] = []
+    for q in web_queries:
+        payload = web_search(q, today=today)
+        web_blocks.append(json.dumps(payload, ensure_ascii=False, indent=2))
+
+    knowledge_hits = retrieve(
+        "clustering drivers riesgo CEDEAR MEP gestión stops MACD",
+        collection="knowledge",
+        n_results=4,
+        persist_dir=persist,
+    )
+    # Retrieval dirigido a informes previos (delta narrativo).
+    report_hits = retrieve(
+        f"informe cartera run restricciones diagnóstico {tickers[0] if tickers else ''}",
+        collection="reports",
+        n_results=3,
+        persist_dir=persist,
+    )
+    knowledge_ids = [str(h["id"]) for h in knowledge_hits]
+    report_ids = [str(h["id"]) for h in report_hits]
+
+    diagnosis = state.get("diagnosis")
+    diagnosis_line = (
+        diagnosis.structural_diagnosis if diagnosis is not None else "(sin diagnóstico aún)"
+    )
+    fx_block = json.dumps(fx, ensure_ascii=False, indent=2)
+    quotes_block = json.dumps(quotes, ensure_ascii=False, indent=2)
+    mep_block = json.dumps(
+        {k: str(v) if isinstance(v, Decimal) else v for k, v in mep_check.items()},
+        ensure_ascii=False,
+        indent=2,
+    )
+    user_msg = build_mercado_user_message(
+        as_of_date=as_of,
+        tickers=", ".join(tickers),
+        fx_block=fx_block,
+        quotes_block=quotes_block,
+        mep_check_block=mep_block,
+        web_block="\n\n".join(web_blocks),
+        rag_knowledge_block=format_hits_as_untrusted_context(knowledge_hits),
+        rag_reports_block=format_hits_as_untrusted_context(report_hits),
+        diagnosis_one_liner=diagnosis_line,
+    )
+
+    if skip_llm:
+        llm_out = _mercado_fallback_summary(
+            as_of=as_of,
+            mep_check=mep_check,
+            knowledge_ids=knowledge_ids,
+            web_queries=web_queries,
+        )
+    else:
+        model = get_chat_model("mercado")
+        try:
+            llm_out = _invoke_mercado_llm(model, user_msg)
+        except Exception as exc:  # noqa: BLE001 — degradar a síntesis determinista
+            log_json(logger, "mercado_llm_failed", run_id=run_id, error=str(exc))
+            llm_out = _mercado_fallback_summary(
+                as_of=as_of,
+                mep_check=mep_check,
+                knowledge_ids=knowledge_ids,
+                web_queries=web_queries,
+            )
+
+    instruments = [
+        {
+            "ticker": t,
+            "quote": (quotes.get("quotes") or {}).get(t),
+        }
+        for t in tickers
+    ]
+    citations = [c.model_dump() for c in llm_out.citations]
+    market_context = MarketContext(
+        summary=llm_out.summary,
+        instruments=instruments,
+        fx_rates=fx,
+        quotes=quotes,
+        mep_implied=mep_check["mep_implied"],
+        mep_market=mep_check["mep_market"],
+        mep_divergence_pct=mep_check["mep_divergence_pct"],
+        mep_warning=mep_check["mep_warning"],
+        citations=citations,
+        retrieved_knowledge_ids=knowledge_ids,
+        retrieved_report_ids=report_ids,
+        web_queries=web_queries,
+        narrative_delta=llm_out.narrative_delta,
+    )
+    log_json(
+        logger,
+        "mercado_done",
+        run_id=run_id,
+        mep_warning=bool(market_context.mep_warning),
+        knowledge_ids=knowledge_ids,
+        report_ids=report_ids,
+        web_queries=web_queries,
+    )
+    return {"market_context": market_context}
+
+
 def _build_report_stub(state: PortfolioState) -> str:
     run_id = state.get("run_id", "")
     degraded = bool(state.get("degraded_mode", False))
     staleness = state.get("staleness")
     diagnosis = state.get("diagnosis")
+    market_context = state.get("market_context")
     constraints = state.get("constraints") or []
     snapshot = state.get("snapshot")
 
     lines = [
-        "# Informe stub (F3)",
+        "# Informe stub (F4)",
         "",
         f"run_id: {run_id}",
         f"degraded_mode: {degraded}",
@@ -492,6 +717,21 @@ def _build_report_stub(state: PortfolioState) -> str:
                 diagnosis.structural_diagnosis,
             ]
         )
+    if market_context is not None:
+        lines.extend(
+            [
+                "",
+                "## Contexto de mercado",
+                market_context.summary,
+            ]
+        )
+        if market_context.mep_warning:
+            lines.extend(["", "### Warning MEP", market_context.mep_warning])
+        if market_context.citations:
+            lines.append("")
+            lines.append("### Citas")
+            for c in market_context.citations:
+                lines.append(f"- [{c.get('source_id')}] {c.get('note')}")
     lines.extend(
         [
             "",
@@ -502,13 +742,19 @@ def _build_report_stub(state: PortfolioState) -> str:
     return "\n".join(lines)
 
 
-def persist_node(state: PortfolioState, *, store: PortfolioStore) -> dict:
-    """Persistencia al final: snapshot nuevo si hubo .xlsx + informe-stub siempre."""
+def persist_node(
+    state: PortfolioState,
+    *,
+    store: PortfolioStore,
+    chroma_dir: str | Path | None = None,
+) -> dict:
+    """Persistencia: snapshot (si .xlsx) + informe + ingesta del informe a Chroma."""
     run_id = state.get("run_id", "")
     inputs = state["inputs"]
     degraded = bool(state.get("degraded_mode", False))
     snapshot = state.get("snapshot")
     report_md = _build_report_stub(state)
+    persist = Path(chroma_dir) if chroma_dir else DEFAULT_CHROMA_DIR
 
     snapshot_meta = None
     if not degraded and inputs.xlsx_path and snapshot is not None:
@@ -532,11 +778,18 @@ def persist_node(state: PortfolioState, *, store: PortfolioStore) -> dict:
         )
 
     report_meta = store.write_report(run_id=run_id, content_md=report_md)
+    ingest_meta = ingest_report(
+        report_id=report_meta["id"],
+        run_id=run_id,
+        content_md=report_md,
+        persist_dir=persist,
+    )
     log_json(
         logger,
         "persist_report",
         run_id=run_id,
         report_id=report_meta["id"],
         snapshot_written=snapshot_meta is not None,
+        chroma_indexed=ingest_meta["id"],
     )
     return {"report": report_md}

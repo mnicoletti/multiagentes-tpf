@@ -141,13 +141,30 @@ class Diagnosis(BaseModel):
 
 
 class MarketContext(BaseModel):
-    """Stub F4 — contexto de mercado por instrumento/sector."""
+    """Contexto de mercado (F4): FX/quotes + RAG/web + verificación MEP."""
 
     model_config = ConfigDict(extra="forbid")
 
     summary: str = ""
     instruments: list[dict[str, Any]] = Field(default_factory=list)
+    fx_rates: dict[str, Any] | None = None
+    quotes: dict[str, Any] | None = None
+    mep_implied: Decimal | None = None
+    mep_market: Decimal | None = None
+    mep_divergence_pct: Decimal | None = None
     mep_warning: str | None = None
+    citations: list[dict[str, str]] = Field(default_factory=list)
+    retrieved_knowledge_ids: list[str] = Field(default_factory=list)
+    retrieved_report_ids: list[str] = Field(default_factory=list)
+    web_queries: list[str] = Field(default_factory=list)
+    narrative_delta: str = ""
+
+    @field_validator("mep_implied", "mep_market", "mep_divergence_pct", mode="before")
+    @classmethod
+    def _coerce_mep_fields(cls, v: object) -> Decimal | None:
+        if v is None or v == "":
+            return None
+        return _as_decimal(v)  # type: ignore[arg-type]
 
 
 class TechnicalReading(BaseModel):
