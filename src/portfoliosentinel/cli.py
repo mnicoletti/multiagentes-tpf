@@ -108,6 +108,9 @@ def _initial_state(
         "report": None,
         "validator_traces": [],
         "pending_gap_resume": None,
+        "report_lint": None,
+        "report_lint_traces": [],
+        "report_linter_feedback": [],
     }
 
 
@@ -170,6 +173,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             tecnico_skip_llm=bool(getattr(args, "skip_llm", False)),
             planificador_skip_llm=bool(getattr(args, "skip_llm", False)),
             mercado_skip_llm=bool(getattr(args, "skip_llm", False)),
+            redactor_skip_llm=bool(getattr(args, "skip_llm", False)),
             include_cartera=not bool(getattr(args, "skip_llm", False)),
         )
         config: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
@@ -227,8 +231,17 @@ def cmd_run(args: argparse.Namespace) -> int:
             if st is not None:
                 print(f"  {st.warning}", flush=True)
         if result.get("report"):
-            print("\n--- Informe stub persistido ---", flush=True)
+            print("\n--- Informe final (linter OK) ---", flush=True)
             print(result["report"], flush=True)
+        elif result.get("report_lint") is not None and not result["report_lint"].approved:
+            print("\n--- Informe NO emitido (linter rechazó) ---", flush=True)
+            print(json.dumps(result["report_lint"].model_dump(), ensure_ascii=False, indent=2))
+        if result.get("report_lint_traces"):
+            print("\n=== Trazas report linter ===", flush=True)
+            print(
+                json.dumps(result["report_lint_traces"], ensure_ascii=False, indent=2),
+                flush=True,
+            )
         mc = result.get("market_context")
         if mc is not None:
             print("\n=== Contexto de mercado ===", flush=True)
@@ -336,6 +349,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
             tecnico_skip_llm=bool(getattr(args, "skip_llm", False)),
             planificador_skip_llm=bool(getattr(args, "skip_llm", False)),
             mercado_skip_llm=bool(getattr(args, "skip_llm", False)),
+            redactor_skip_llm=bool(getattr(args, "skip_llm", False)),
             include_cartera=not bool(getattr(args, "skip_llm", False)),
         )
         config = {"configurable": {"thread_id": args.thread_id}}
@@ -405,8 +419,11 @@ def cmd_resume(args: argparse.Namespace) -> int:
                     + (f" stop={a.stop_level}" if a.stop_level is not None else "")
                 )
         if result.get("report"):
-            print("\n--- Informe stub persistido ---")
+            print("\n--- Informe final (linter OK) ---")
             print(result["report"])
+        elif result.get("report_lint") is not None and not result["report_lint"].approved:
+            print("\n--- Informe NO emitido (linter rechazó) ---")
+            print(json.dumps(result["report_lint"].model_dump(), ensure_ascii=False, indent=2))
         if diagnosis is None and not result.get("report") and plan is None:
             print("Resume terminó sin diagnosis/plan/report (¿sigue pausado?)")
             return 1
@@ -420,7 +437,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="portfoliosentinel", description="PortfolioSentinel CLI")
     sub = p.add_subparsers(dest="command", required=True)
 
-    run = sub.add_parser("run", help="Corrida F5: técnico + plan + validator + HITL")
+    run = sub.add_parser("run", help="Corrida F6: redactor + linter + persistencia")
     run.add_argument("--xlsx", type=str, default=str(DEFAULT_FIXTURE_XLSX))
     run.add_argument(
         "--no-xlsx",
@@ -458,7 +475,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--skip-llm",
         action="store_true",
-        help="Modo determinista F5 (sin cartera/LLM; técnico+plan stubs)",
+        help="Modo determinista (sin cartera/LLM; stubs técnico+plan+redactor)",
     )
     run.add_argument(
         "--stop-after",

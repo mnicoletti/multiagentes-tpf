@@ -44,6 +44,9 @@ def _initial_state(**input_kw):
         "report": None,
         "validator_traces": [],
         "pending_gap_resume": None,
+        "report_lint": None,
+        "report_lint_traces": [],
+        "report_linter_feedback": [],
     }
 
 
@@ -181,6 +184,7 @@ def test_validator_reject_and_replan_trace(tmp_path: Path, snapshot):
             include_planificador=True,
             tecnico_skip_llm=True,
             planificador_skip_llm=True,
+            redactor_skip_llm=True,
         )
         thread_id = f"replan-{uuid.uuid4().hex[:8]}"
         ggal_stop = str(IMAGES / "chart-ggal-with-stop.png")
@@ -231,6 +235,7 @@ def test_gap_interrupt_resume_completes_stop(tmp_path: Path):
             include_planificador=True,
             tecnico_skip_llm=True,
             planificador_skip_llm=True,
+            redactor_skip_llm=True,
         )
         thread_id = f"gap-{uuid.uuid4().hex[:8]}"
         no_stop = str(IMAGES / "chart-ggal-no-stop.png")

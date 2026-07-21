@@ -1,4 +1,4 @@
-"""Compilación del grafo F5: cartera → mercado → técnico → plan → validator → HITL → persist."""
+"""Compilación del grafo F6: … → plan → validator → redactor → linter → persist."""
 
 from __future__ import annotations
 
@@ -25,6 +25,12 @@ from portfoliosentinel.graph.nodes_f5 import (
     validation_escalate_node,
     validator_node,
 )
+from portfoliosentinel.graph.nodes_f6 import (
+    redactor_node,
+    report_lint_fail_node,
+    report_linter_node,
+    route_after_report_linter,
+)
 from portfoliosentinel.graph.state import PortfolioState
 from portfoliosentinel.tools.portfolio_store import open_domain_store
 
@@ -40,16 +46,20 @@ def build_graph(
     include_mercado: bool = True,
     include_tecnico: bool = True,
     include_planificador: bool = True,
+    include_redactor: bool | None = None,
     mercado_skip_llm: bool = False,
     tecnico_skip_llm: bool = False,
     planificador_skip_llm: bool = False,
+    redactor_skip_llm: bool = False,
 ) -> Any:
-    """Construye y compila el grafo F5.
+    """Construye y compila el grafo F6.
 
     Flags `*_skip_llm` / `include_*` permiten DoD sin llamar proveedores.
+    Si `include_redactor` es None, se activa junto con el planificador.
     """
     domain_store = store or open_domain_store(domain_db or DEFAULT_DOMAIN_DB)
     chroma = Path(chroma_dir) if chroma_dir else DEFAULT_CHROMA_DIR
+    use_redactor = include_planificador if include_redactor is None else include_redactor
 
     def _intake(state: PortfolioState) -> dict:
         return intake_node(state, store=domain_store)
@@ -74,6 +84,9 @@ def build_graph(
     def _planificador(state: PortfolioState) -> dict:
         return planificador_node(state, skip_llm=planificador_skip_llm)
 
+    def _redactor(state: PortfolioState) -> dict:
+        return redactor_node(state, skip_llm=redactor_skip_llm)
+
     def _persist(state: PortfolioState) -> dict:
         return persist_node(state, store=domain_store, chroma_dir=chroma)
 
@@ -93,6 +106,11 @@ def build_graph(
         graph.add_node("validation_escalate", validation_escalate_node)
         graph.add_node("gaps_interrupt", gaps_interrupt_node)
 
+    if use_redactor:
+        graph.add_node("redactor", _redactor)
+        graph.add_node("report_linter", report_linter_node)
+        graph.add_node("report_lint_fail", report_lint_fail_node)
+
     graph.add_node("persist", _persist)
 
     graph.add_edge(START, "intake")
@@ -108,8 +126,6 @@ def build_graph(
     if include_mercado and include_tecnico:
         # Secuencial (no fan-out paralelo): chromadb PersistentClient no es
         # thread-safe ante dos opens concurrentes (crash RustBindingsAPI).
-        # Orden: mercado → técnico → planificador. Equivalente funcional a
-        # SPEC §4.3 sin carrera sobre el store embebido.
         graph.add_edge(prev, "analista_mercado")
         graph.add_edge("analista_mercado", "analista_tecnico")
         analysis_nodes = ["analista_tecnico"]
@@ -122,6 +138,8 @@ def build_graph(
         graph.add_edge(prev, "analista_tecnico")
         analysis_nodes = ["analista_tecnico"]
         prev = "analista_tecnico"
+
+    post_plan_target = "redactor" if use_redactor else "persist"
 
     if include_planificador:
         if analysis_nodes:
@@ -138,23 +156,35 @@ def build_graph(
                 "planificador": "planificador",
                 "validation_escalate": "validation_escalate",
                 "gaps_interrupt": "gaps_interrupt",
-                "persist": "persist",
+                "redactor": post_plan_target,
+                "persist": post_plan_target,
             },
         )
-        # Tras escalate HITL → persist
-        graph.add_edge("validation_escalate", "persist")
-        # Tras aportar gráficos: técnico → planificador (reloop validator)
+        graph.add_edge("validation_escalate", post_plan_target)
         if include_tecnico:
             graph.add_edge("gaps_interrupt", "analista_tecnico")
         else:
             graph.add_edge("gaps_interrupt", "planificador")
     else:
-        # Sin planificador (compat F4 tests): último análisis → persist
+        # Sin planificador (compat F3/F4): último análisis → persist (stub)
         if analysis_nodes:
             for n in analysis_nodes:
                 graph.add_edge(n, "persist")
         else:
             graph.add_edge(prev, "persist")
+
+    if use_redactor:
+        graph.add_edge("redactor", "report_linter")
+        graph.add_conditional_edges(
+            "report_linter",
+            route_after_report_linter,
+            {
+                "redactor": "redactor",
+                "persist": "persist",
+                "report_lint_fail": "report_lint_fail",
+            },
+        )
+        graph.add_edge("report_lint_fail", "persist")
 
     graph.add_edge("persist", END)
 
@@ -165,4 +195,11 @@ def build_graph(
 
 
 # Re-export tipado para callers
-RouteName = Literal["planificador", "validation_escalate", "gaps_interrupt", "persist"]
+RouteName = Literal[
+    "planificador",
+    "validation_escalate",
+    "gaps_interrupt",
+    "redactor",
+    "persist",
+    "report_lint_fail",
+]

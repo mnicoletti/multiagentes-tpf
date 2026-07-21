@@ -466,10 +466,11 @@ def validator_node(state: PortfolioState) -> dict:
 
 def route_after_validator(
     state: PortfolioState,
-) -> Literal["planificador", "validation_escalate", "gaps_interrupt", "persist"]:
+) -> Literal["planificador", "validation_escalate", "gaps_interrupt", "redactor", "persist"]:
+    """Tras plan aprobado sin gaps → redactor (F6). `persist` queda por compat."""
     validation = state.get("validation")
     if validation is None:
-        return "persist"
+        return "redactor"
     max_retries = max_validator_retries()
     if not validation.approved:
         # attempt 1 = primer plan; retries permiten hasta max_retries replanes
@@ -479,7 +480,7 @@ def route_after_validator(
     gaps = state.get("info_gaps") or []
     if gaps:
         return "gaps_interrupt"
-    return "persist"
+    return "redactor"
 
 
 def validation_escalate_node(state: PortfolioState) -> dict:

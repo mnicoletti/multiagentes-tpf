@@ -782,13 +782,26 @@ def persist_node(
     store: PortfolioStore,
     chroma_dir: str | Path | None = None,
 ) -> dict:
-    """Persistencia: snapshot (si .xlsx) + informe + ingesta del informe a Chroma."""
+    """Persistencia: snapshot (si .xlsx) + informe aprobado + ingesta a Chroma.
+
+    F6: si hubo linter y no aprobó, el informe NO se persiste ni se indexa.
+    Sin redactor (F3/F4), se mantiene el stub.
+    """
     run_id = state.get("run_id", "")
     inputs = state["inputs"]
     degraded = bool(state.get("degraded_mode", False))
     snapshot = state.get("snapshot")
-    report_md = _build_report_stub(state)
     persist = Path(chroma_dir) if chroma_dir else DEFAULT_CHROMA_DIR
+
+    lint = state.get("report_lint")
+    existing_report = state.get("report")
+    if lint is not None:
+        # Camino F6: solo sale el informe si el linter aprobó.
+        report_md = existing_report if lint.approved and existing_report else None
+    elif existing_report:
+        report_md = existing_report
+    else:
+        report_md = _build_report_stub(state)
 
     snapshot_meta = None
     if not degraded and inputs.xlsx_path and snapshot is not None:
@@ -810,6 +823,16 @@ def persist_node(
             run_id=run_id,
             reason="degraded_mode" if degraded else "no_xlsx_or_snapshot",
         )
+
+    if report_md is None:
+        log_json(
+            logger,
+            "persist_report_skipped",
+            run_id=run_id,
+            reason="linter_rejected_or_missing",
+            snapshot_written=snapshot_meta is not None,
+        )
+        return {"report": None}
 
     report_meta = store.write_report(run_id=run_id, content_md=report_md)
     ingest_meta = ingest_report(

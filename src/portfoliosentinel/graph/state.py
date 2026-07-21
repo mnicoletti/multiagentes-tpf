@@ -271,6 +271,17 @@ class ValidationResult(BaseModel):
     attempt: int = 0
 
 
+class ReportLintResult(BaseModel):
+    """Veredicto del linter de informe (código + YAML; NUNCA un prompt)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    approved: bool = False
+    feedback: list[str] = Field(default_factory=list)
+    violations: list[ValidationViolation] = Field(default_factory=list)
+    attempt: int = 0
+
+
 class ExternalReview(BaseModel):
     """Stub F8 — observaciones A2A (no bloquean)."""
 
@@ -311,3 +322,7 @@ class PortfolioState(TypedDict, total=False):
     # F5: traza de replan / HITL de validación
     validator_traces: list[dict[str, Any]]
     pending_gap_resume: dict[str, Any] | None
+    # F6: linter de informe post-Redactor
+    report_lint: ReportLintResult | None
+    report_lint_traces: list[dict[str, Any]]
+    report_linter_feedback: list[str]

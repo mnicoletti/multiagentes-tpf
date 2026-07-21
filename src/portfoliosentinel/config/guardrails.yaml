@@ -1,5 +1,5 @@
 # Templates de guardrails — capa de salida determinista (SPEC §8.3, ADR-0006).
-# El validator de hard constraints lee estas reglas; NO van a prompts.
+# El validator de hard constraints y el linter de informe leen estas reglas; NO van a prompts.
 
 rules:
   - id: no-sell-restricted
@@ -22,14 +22,69 @@ rules:
     params:
       compare: quantity_lte_holding
 
-# Linter de informe (F6) — declaradas acá para continuidad; F5 no las aplica al plan.
+# Linter de informe (F6) — templates YAML parametrizables (SPEC §8.3).
 report_rules:
+  - id: no-sell-restricted
+    type: report_linter
+    description: >
+      El informe no puede recomendar vender un ticker con restricción activa.
+    params:
+      tickers_from: constraints_db
+      blocked_actions:
+        - salir
+        - tomar_ganancia_parcial
+        - reducir
+      sell_verbs:
+        - vender
+        - liquidar
+        - deshacer
+
+  - id: qty-within-holdings
+    type: report_linter
+    description: >
+      Cantidades a vender/reducir en el informe ≤ tenencia del snapshot.
+    params:
+      compare: quantity_lte_holding
+
   - id: disclaimer-present
     type: report_linter
+    description: Descargo de no-asesoramiento matriculado (SPEC §6.3 / §1).
+    params:
+      required_substrings:
+        - "no constituye asesoramiento financiero"
+        - "no ejecuta órdenes"
+
   - id: no-execution-language
     type: report_linter
+    description: Prohibido lenguaje de ejecución de órdenes.
+    params:
+      forbidden_patterns:
+        - "ya ejecuté"
+        - "ya ejecute"
+        - "orden enviada"
+        - "orden colocada"
+        - "ya vendí"
+        - "ya vendi"
+        - "ya compré"
+        - "ya compre"
+        - "ejecuté la orden"
+        - "ejecute la orden"
+
   - id: report-structure
     type: report_linter
+    description: Las 7 secciones de SPEC §6.3 (marcadores exactos).
+    params:
+      required_headings:
+        - "## 1. Encabezado"
+        - "## 2. Radiografía"
+        - "## 3. Análisis por instrumento"
+        - "## 4. Integración FCI"
+        - "## 5. Screening de activos nuevos"
+        - "## 6. Solicitud de gráficos"
+        - "## 7. Plan de acción consolidado"
 
 validator:
   max_retries: 2  # reintentos al Planificador; al tercero → interrupt() HITL
+
+report_linter:
+  max_retries: 2  # reintentos al Redactor; al tercero el informe NO sale
