@@ -75,6 +75,16 @@ make run XLSX=tmp/mi-estado.xlsx
   --confirm-constraints
 ```
 
+### Carteras de ejemplo (`docs/ejemplos/`)
+
+Hay cuatro estados **sintéticos y anonimizados** (layout bróker) listos para
+probar sin datos personales. Perfiles y composición:
+[`docs/ejemplos/README.md`](docs/ejemplos/README.md).
+
+```bash
+make run XLSX=docs/ejemplos/comitente-02-agresivo-energia.xlsx
+```
+
 Los **tickers nuevos** se reconocen solos desde el snapshot (sin lista humana ni HITL).
 
 ### Cotizaciones y MEP
@@ -149,14 +159,17 @@ make inspect THREAD_ID=<id>
 # 1. Corrida feliz (fixture sintética, default --xlsx)
 make run
 
-# 2. Estado de cuenta propio (detalle en sección anterior)
+# 2. Cartera de ejemplo (docs/ejemplos/; ver perfiles allí)
+make run XLSX=docs/ejemplos/comitente-02-agresivo-energia.xlsx
+
+# 3. Estado de cuenta propio (detalle en sección anterior)
 make run XLSX=tmp/mi-estado.xlsx
 
-# 3. Restricción + capital nuevo
+# 4. Restricción + capital nuevo
 .venv/bin/python -m portfoliosentinel.cli run --market-fixture --confirm-constraints \
   --constraint "no vender YPFD" --capital-new 500000
 
-# 4. Resume HITL tras interrupt (anotá el thread_id que imprime la CLI)
+# 5. Resume HITL tras interrupt (anotá el thread_id que imprime la CLI)
 .venv/bin/python -m portfoliosentinel.cli resume --thread-id <id> \
   --stop-level YPFD=45000
 
@@ -226,6 +239,7 @@ append-only (ADR-0003).
 | `make install` | venv + deps + fixtures |
 | `make run` | corrida `MARKET_FIXTURE=1` + `--confirm-constraints` |
 | `make run XLSX=tmp/mi.xlsx` | misma corrida con tu estado |
+| `make run XLSX=docs/ejemplos/comitente-0N-….xlsx` | corrida con cartera de ejemplo |
 | `make run MODELS_YAML=...` | override de modelos |
 | `make a2a` | compliance en `:8765` |
 | `make demo` | guion F8 |
