@@ -28,6 +28,10 @@ build/
 # Datos reales del usuario (nunca commitear)
 data/private/
 *.local.xlsx
+tmp/
+
+# Informes generados localmente (pueden contener datos de cartera)
+output/
 
 # SQLite runtime / checkpointer local
 *.db
