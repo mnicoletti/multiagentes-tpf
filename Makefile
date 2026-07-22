@@ -1,10 +1,12 @@
-.PHONY: lint run eval demo install test inspect ingest-knowledge
+.PHONY: lint run eval demo install test inspect ingest-knowledge a2a
 
 # Preferí el venv local si existe (PEP 668 / Homebrew).
 PYTHON := $(shell if [ -x .venv/bin/python ]; then echo .venv/bin/python; else echo python3; fi)
 
 # Override opcional: PORTFOLIOSENTINEL_MODELS_YAML=... make run
 MODELS_YAML ?=
+A2A_HOST ?= 127.0.0.1
+A2A_PORT ?= 8765
 
 install:
 	python3 -m venv .venv
@@ -15,8 +17,8 @@ install:
 	.venv/bin/python scripts/build_image_fixtures.py
 
 lint:
-	$(PYTHON) -m ruff check src tests scripts mcp_servers evals
-	$(PYTHON) -m ruff format --check src tests scripts mcp_servers evals
+	$(PYTHON) -m ruff check src tests scripts mcp_servers evals a2a_compliance
+	$(PYTHON) -m ruff format --check src tests scripts mcp_servers evals a2a_compliance
 
 run:
 	@if [ -n "$(MODELS_YAML)" ]; then \
@@ -35,9 +37,12 @@ ingest-knowledge:
 eval:
 	MARKET_FIXTURE=1 $(PYTHON) scripts/run_evals.py
 
+a2a:
+	A2A_HOST=$(A2A_HOST) A2A_PORT=$(A2A_PORT) A2A_SKIP_LLM=$${A2A_SKIP_LLM:-0} \
+		$(PYTHON) -m a2a_compliance
+
 demo:
-	@echo "make demo: stub — la demo end-to-end se completa en F8"
-	@exit 1
+	MARKET_FIXTURE=1 $(PYTHON) scripts/demo_f8.py
 
 test:
 	MARKET_FIXTURE=1 $(PYTHON) -m pytest tests -q

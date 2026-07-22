@@ -21,8 +21,10 @@ roles:
       temperature: 0
 
   tecnico:
+    # Visión: preferí qwen2.5vl / llama3.2-vision (ADR-0009).
+    # Con un modelo solo-texto la lectura de gráficos degrada.
     provider: ollama
-    model: qwen3:8b
+    model: qwen2.5vl:7b
     params:
       temperature: 0
 

@@ -236,6 +236,13 @@ def cmd_run(args: argparse.Namespace) -> int:
         elif result.get("report_lint") is not None and not result["report_lint"].approved:
             print("\n--- Informe NO emitido (linter rechazó) ---", flush=True)
             print(json.dumps(result["report_lint"].model_dump(), ensure_ascii=False, indent=2))
+        a2a = result.get("a2a_review")
+        if a2a is not None:
+            print("\n=== Revisión externa (A2A) ===", flush=True)
+            print(
+                json.dumps(a2a.model_dump(), ensure_ascii=False, indent=2),
+                flush=True,
+            )
         if result.get("report_lint_traces"):
             print("\n=== Trazas report linter ===", flush=True)
             print(

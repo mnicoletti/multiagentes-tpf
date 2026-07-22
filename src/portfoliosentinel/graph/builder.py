@@ -1,4 +1,4 @@
-"""Compilación del grafo F6: … → plan → validator → redactor → linter → persist."""
+"""Compilación del grafo F8: … → plan → validator → A2A → redactor → linter → persist."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from portfoliosentinel.graph.nodes import (
     orchestrator_node,
     persist_node,
 )
+from portfoliosentinel.graph.nodes_a2a import a2a_compliance_node
 from portfoliosentinel.graph.nodes_f5 import (
     analista_tecnico_node,
     gaps_interrupt_node,
@@ -48,19 +49,22 @@ def build_graph(
     include_tecnico: bool = True,
     include_planificador: bool = True,
     include_redactor: bool | None = None,
+    include_a2a: bool | None = None,
     mercado_skip_llm: bool = False,
     tecnico_skip_llm: bool = False,
     planificador_skip_llm: bool = False,
     redactor_skip_llm: bool = False,
 ) -> Any:
-    """Construye y compila el grafo F6.
+    """Construye y compila el grafo F8.
 
     Flags `*_skip_llm` / `include_*` permiten DoD sin llamar proveedores.
     Si `include_redactor` es None, se activa junto con el planificador.
+    Si `include_a2a` es None, se activa junto con el redactor (sigue siendo no bloqueante).
     """
     domain_store = store or open_domain_store(domain_db or DEFAULT_DOMAIN_DB)
     chroma = Path(chroma_dir) if chroma_dir else DEFAULT_CHROMA_DIR
     use_redactor = include_planificador if include_redactor is None else include_redactor
+    use_a2a = use_redactor if include_a2a is None else include_a2a
 
     def _intake(state: PortfolioState) -> dict:
         return intake_node(state, store=domain_store)
@@ -107,6 +111,9 @@ def build_graph(
         graph.add_node("validation_escalate", validation_escalate_node)
         graph.add_node("gaps_interrupt", gaps_interrupt_node)
 
+    if use_a2a:
+        graph.add_node("a2a_compliance", a2a_compliance_node)
+
     if use_redactor:
         graph.add_node("redactor", _redactor)
         graph.add_node("report_linter", report_linter_node)
@@ -140,7 +147,12 @@ def build_graph(
         analysis_nodes = ["analista_tecnico"]
         prev = "analista_tecnico"
 
-    post_plan_target = "redactor" if use_redactor else "persist"
+    if use_a2a and use_redactor:
+        post_plan_target = "a2a_compliance"
+    elif use_redactor:
+        post_plan_target = "redactor"
+    else:
+        post_plan_target = "persist"
 
     if include_planificador:
         if analysis_nodes:
@@ -181,6 +193,9 @@ def build_graph(
         else:
             graph.add_edge(prev, "persist")
 
+    if use_a2a and use_redactor:
+        graph.add_edge("a2a_compliance", "redactor")
+
     if use_redactor:
         graph.add_edge("redactor", "report_linter")
         graph.add_conditional_edges(
@@ -207,6 +222,7 @@ RouteName = Literal[
     "planificador",
     "validation_escalate",
     "gaps_interrupt",
+    "a2a_compliance",
     "redactor",
     "persist",
     "report_lint_fail",

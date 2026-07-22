@@ -786,7 +786,10 @@ def persist_node(
 
     F6: si hubo linter y no aprobó, el informe NO se persiste ni se indexa.
     Sin redactor (F3/F4), se mantiene el stub.
+    F8: anexa la sección A2A consultiva *después* del linter (no es §6.3).
     """
+    from portfoliosentinel.tools.a2a_client import format_a2a_section
+
     run_id = state.get("run_id", "")
     inputs = state["inputs"]
     degraded = bool(state.get("degraded_mode", False))
@@ -802,6 +805,11 @@ def persist_node(
         report_md = existing_report
     else:
         report_md = _build_report_stub(state)
+
+    # Anexar revisión externa (disponible o "no disponible") sin re-lint.
+    if report_md is not None and state.get("a2a_review") is not None:
+        if "## Revisión externa (A2A)" not in report_md:
+            report_md = report_md.rstrip() + format_a2a_section(state.get("a2a_review"))
 
     snapshot_meta = None
     if not degraded and inputs.xlsx_path and snapshot is not None:

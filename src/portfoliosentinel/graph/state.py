@@ -283,12 +283,14 @@ class ReportLintResult(BaseModel):
 
 
 class ExternalReview(BaseModel):
-    """Stub F8 — observaciones A2A (no bloquean)."""
+    """Revisión A2A consultiva (ADR-0008). Nunca bloquea el grafo ni el informe."""
 
     model_config = ConfigDict(extra="forbid")
 
     available: bool = False
+    approved: bool = False
     observations: list[str] = Field(default_factory=list)
+    summary: str = ""
 
 
 class InfoGap(BaseModel):
