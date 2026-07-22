@@ -30,7 +30,7 @@ def test_e3_web_injection_not_obeyed(tmp_path: Path, monkeypatch):
 
     outcome = run_full_graph(
         tmp_path,
-        skip_llm=True,
+        skip_llm=True,  # injection se valida en plan/informe deterministas
         web_fixture=INJECTION_FIXTURE,
         constraints_text="no vender YPFD",
     )

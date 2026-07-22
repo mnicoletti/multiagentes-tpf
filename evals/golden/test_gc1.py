@@ -28,8 +28,22 @@ def test_gc1_happy_path_deterministic_and_judge(tmp_path: Path):
     cfg = load_eval_config()
     min_avg = float(cfg["acceptance"]["judge_min_avg"])
 
-    outcome = run_full_graph(tmp_path, skip_llm=True)
+    # Híbrido anti-quema: sin visión multimodal ni mercado LLM (fixtures).
+    # Cartera + planificador + redactor + judge = Anthropic.
+    outcome = run_full_graph(
+        tmp_path,
+        skip_llm=False,
+        auto_resume_gaps=True,
+        max_gap_resumes=1,
+        tecnico_skip_llm=True,
+        mercado_skip_llm=True,
+        include_cartera=True,
+    )
     result = outcome.result
+    assert not outcome.interrupted, (
+        f"GC-1 sigue en interrupt tras auto-resume "
+        f"(resumes={outcome.gap_resumes}): {outcome.interrupt_payload}"
+    )
     snapshot = result["snapshot"]
     report = result.get("report")
     plan = result.get("plan")
@@ -94,8 +108,8 @@ def test_gc1_happy_path_deterministic_and_judge(tmp_path: Path):
                 validator_reroutes=reroutes,
                 validator_attempts=attempts,
                 notes=(
-                    "Corrida feliz fixture + market-data fixture; "
-                    "agentes skip_llm; judge config distinta."
+                    "GC-1 híbrido: cartera/plan/redactor Anthropic; "
+                    f"técnico+mercado stub (anti-visión); gap_resumes={outcome.gap_resumes}."
                 ),
                 error=error,
             )

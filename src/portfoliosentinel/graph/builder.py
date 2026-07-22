@@ -21,6 +21,7 @@ from portfoliosentinel.graph.nodes_f5 import (
     analista_tecnico_node,
     gaps_interrupt_node,
     planificador_node,
+    route_after_gaps_interrupt,
     route_after_validator,
     validation_escalate_node,
     validator_node,
@@ -162,7 +163,14 @@ def build_graph(
         )
         graph.add_edge("validation_escalate", post_plan_target)
         if include_tecnico:
-            graph.add_edge("gaps_interrupt", "analista_tecnico")
+            graph.add_conditional_edges(
+                "gaps_interrupt",
+                route_after_gaps_interrupt,
+                {
+                    "analista_tecnico": "analista_tecnico",
+                    "planificador": "planificador",
+                },
+            )
         else:
             graph.add_edge("gaps_interrupt", "planificador")
     else:

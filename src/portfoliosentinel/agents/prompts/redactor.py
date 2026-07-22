@@ -74,5 +74,8 @@ Capital nuevo ARS: {capital_new}
 === FEEDBACK DEL LINTER (si hubo rechazo previo) ===
 {linter_feedback or "(ninguno — primer intento)"}
 
-Redactá el informe completo §6.3 respetando encabezados, descargo y Acciones_verificables.
+Redactá el informe completo §6.3.
+La PRIMERA línea del cuerpo debe ser exactamente: ## 1. Encabezado
+Incluí el descargo literal con "no constituye asesoramiento financiero" y "no ejecuta órdenes".
+Sin fences ni JSON: solo markdown con las 7 secciones.
 """

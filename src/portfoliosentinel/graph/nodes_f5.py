@@ -25,7 +25,11 @@ from portfoliosentinel.agents.prompts.tecnico import (
 from portfoliosentinel.agents.tecnico import TecnicoLLMOutput
 from portfoliosentinel.config.models import get_chat_model
 from portfoliosentinel.config.settings import DEFAULT_CHROMA_DIR
-from portfoliosentinel.graph.f5_logic import build_deterministic_plan, stub_technical_readings
+from portfoliosentinel.graph.f5_logic import (
+    build_deterministic_plan,
+    enrich_restricted_mitigations,
+    stub_technical_readings,
+)
 from portfoliosentinel.graph.logging_utils import get_node_logger, log_json
 from portfoliosentinel.graph.state import (
     InfoGap,
@@ -185,31 +189,73 @@ def analista_tecnico_node(
         path = all_paths[i] if i < len(all_paths) else all_paths[-1]
         purpose = all_purposes.get(path) or all_purposes.get(Path(path).name) or "unspecified"
         stop = r.stop_level
-        # Hard rule: if model invents stop without visibility flag, drop it.
-        if stop is not None and not r.stop_visible_in_image and path not in resume_stops:
-            # Unless user resume provided the level for this ticker
-            if not (r.ticker and r.ticker.upper() in resume_stops):
-                stop = None
-                r.needs_stop_level = True
-        if r.ticker and r.ticker.upper() in resume_stops:
-            stop = resume_stops[r.ticker.upper()]
+        ticker_u = (r.ticker or "").upper() or None
+        # Screening no exige stop (el gap lo pide el planificador solo si hace falta).
+        is_screening = "screening" in purpose.lower()
+        # Hard rule: if model invents stop without visibility flag, drop it —
+        # salvo HITL resume que aportó el nivel para ese ticker.
+        if (
+            stop is not None
+            and not r.stop_visible_in_image
+            and not (ticker_u and ticker_u in resume_stops)
+        ):
+            stop = None
+            r.needs_stop_level = True
+        if ticker_u and ticker_u in resume_stops:
+            stop = resume_stops[ticker_u]
             r.needs_stop_level = False
+        needs_stop = False if is_screening else bool(r.needs_stop_level and stop is None)
         readings.append(
             TechnicalReading(
                 image_path=path,
                 purpose=purpose,
-                ticker=r.ticker,
+                ticker=ticker_u,
                 summary=r.summary,
                 trend=r.trend,
                 indicators=r.indicators,
                 verdict=r.verdict,
-                needs_stop_level=bool(r.needs_stop_level and stop is None),
+                needs_stop_level=needs_stop,
                 stop_level=stop,
             )
         )
 
+    # HITL: asegurar lectura con stop por cada ticker confirmado (aunque el LLM
+    # no lo haya atado a una imagen).
+    present = {(r.ticker or "").upper() for r in readings if r.ticker}
+    updated: list[TechnicalReading] = []
+    for r in readings:
+        t = (r.ticker or "").upper()
+        if t and t in resume_stops:
+            updated.append(
+                r.model_copy(
+                    update={
+                        "stop_level": resume_stops[t],
+                        "needs_stop_level": False,
+                    }
+                )
+            )
+        else:
+            updated.append(r)
+    readings = updated
+    for ticker, level in resume_stops.items():
+        if ticker not in present:
+            readings.append(
+                TechnicalReading(
+                    image_path="hitl://resume-stop",
+                    purpose="stop_chart",
+                    ticker=ticker,
+                    summary=f"Stop confirmado por usuario (HITL resume): {level}",
+                    trend=None,
+                    indicators={"source": "hitl_resume"},
+                    verdict="stop_confirmado_hitl",
+                    needs_stop_level=False,
+                    stop_level=level,
+                )
+            )
+
     log_json(logger, "tecnico_done", run_id=run_id, n=len(readings))
-    return {"technical_readings": readings, "pending_gap_resume": None}
+    # pending_gap_resume lo consume el planificador (no borrar acá).
+    return {"technical_readings": readings}
 
 
 def _snapshot_block(state: PortfolioState) -> str:
@@ -361,12 +407,34 @@ def planificador_node(state: PortfolioState, *, skip_llm: bool = False) -> dict:
         for a in llm_out.actions
     ]
 
-    # Hard post-process: never invent stops for tickers with needs_stop and no visible level
+    # Stops ya resueltos: lecturas técnicas + HITL resume (si aún está pending).
+    stops_by_ticker: dict[str, Decimal] = {
+        r.ticker.upper(): r.stop_level for r in technical if r.ticker and r.stop_level is not None
+    }
+    pending = state.get("pending_gap_resume") or {}
+    for k, v in (pending.get("stop_levels") or {}).items():
+        stops_by_ticker.setdefault(str(k).upper(), Decimal(str(v)))
+
+    for a in actions:
+        if a.ticker.upper() in stops_by_ticker and a.stop_level is None:
+            a.stop_level = stops_by_ticker[a.ticker.upper()]
+
+    # SPEC GC-2: restringido → riesgo + mitigaciones (determinista; no depende del LLM).
+    actions = enrich_restricted_mitigations(
+        actions, snapshot=snapshot, constraints=constraints
+    )
+
+    # Hard post-process: nunca inventar stops; gap solo si hace falta y no hay HITL.
     needs = {
         r.ticker.upper()
         for r in technical
-        if r.ticker and r.needs_stop_level and r.stop_level is None
+        if r.ticker
+        and r.needs_stop_level
+        and r.stop_level is None
+        and "screening" not in (r.purpose or "").lower()
     }
+    needs -= set(stops_by_ticker.keys())
+
     gaps: list[InfoGap] = []
     for a in actions:
         if a.ticker.upper() in needs and a.stop_level is not None:
@@ -384,13 +452,22 @@ def planificador_node(state: PortfolioState, *, skip_llm: bool = False) -> dict:
                 )
             )
     for g in llm_out.info_gaps:
-        gaps.append(InfoGap(kind=g.kind, ticker=g.ticker.upper(), detail=g.detail))
+        t = g.ticker.upper()
+        # Solo aceptar gaps LLM que el post-proceso determinista también exige
+        # (evita que el modelo invente gaps MELI/SPY/screening en loop).
+        if t not in needs:
+            continue
+        if t in stops_by_ticker:
+            continue
+        gaps.append(InfoGap(kind=g.kind, ticker=t, detail=g.detail))
     # dedupe gaps by ticker
     seen: set[str] = set()
     uniq_gaps: list[InfoGap] = []
     for g in gaps:
         key = f"{g.kind}:{g.ticker}"
         if key in seen:
+            continue
+        if g.ticker.upper() in stops_by_ticker:
             continue
         seen.add(key)
         uniq_gaps.append(g)
@@ -424,7 +501,11 @@ def planificador_node(state: PortfolioState, *, skip_llm: bool = False) -> dict:
         n_actions=len(actions),
         gaps=[g.ticker for g in uniq_gaps],
     )
-    return {"plan": plan, "info_gaps": uniq_gaps}
+    return {
+        "plan": plan,
+        "info_gaps": uniq_gaps,
+        "pending_gap_resume": None,
+    }
 
 
 def validator_node(state: PortfolioState) -> dict:
@@ -481,6 +562,20 @@ def route_after_validator(
     if gaps:
         return "gaps_interrupt"
     return "redactor"
+
+
+def route_after_gaps_interrupt(
+    state: PortfolioState,
+) -> Literal["analista_tecnico", "planificador"]:
+    """Tras HITL: si hay imágenes nuevas → técnico; si solo stop_levels → planificador.
+
+    Evita re-correr visión multimodal (caro) cuando el usuario solo confirma niveles.
+    """
+    pending = state.get("pending_gap_resume") or {}
+    new_images = [p for p in (pending.get("image_paths") or []) if p]
+    if new_images:
+        return "analista_tecnico"
+    return "planificador"
 
 
 def validation_escalate_node(state: PortfolioState) -> dict:

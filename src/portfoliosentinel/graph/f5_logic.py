@@ -44,7 +44,101 @@ def _restricted_tickers(constraints: list[Constraint]) -> set[str]:
             continue
         if c.ticker:
             out.add(c.ticker.upper())
+            continue
+        rule = (c.rule or "").lower()
+        if "no vender" in rule:
+            m = re.search(r"no vender\s+([A-Za-z0-9.]+)", rule)
+            if m:
+                out.add(m.group(1).upper())
     return out
+
+
+_SELL_LIKE = frozenset({"salir", "tomar_ganancia_parcial", "reducir"})
+
+
+def enrich_restricted_mitigations(
+    actions: list[PlanAction],
+    *,
+    snapshot: Snapshot,
+    constraints: list[Constraint],
+) -> list[PlanAction]:
+    """Post-proceso determinista (SPEC §GC-2 / ADR-0002).
+
+    El LLM puede respetar "no vender" pero olvidar risk_notes/mitigations o la
+    mitigación vía VIST. Completa campos y asegura una acción sell-like en el
+    par energético sin inventar cantidades fuera del snapshot.
+    """
+    restricted = _restricted_tickers(constraints)
+    if not restricted:
+        return actions
+
+    by_ticker: dict[str, PlanAction] = {}
+    order: list[str] = []
+    for a in actions:
+        key = a.ticker.upper()
+        if key not in by_ticker:
+            order.append(key)
+        by_ticker[key] = a
+
+    for ticker in sorted(restricted):
+        existing = by_ticker.get(ticker)
+        if existing is None:
+            by_ticker[ticker] = PlanAction(
+                ticker=ticker,
+                action="mantener",
+                rationale=f"Restricción activa 'no vender {ticker}': se mantiene.",
+                risk_notes=[f"Riesgo residual: no se puede liquidar {ticker}."],
+                mitigations=["Mitigar vía otro ticker del mismo driver o capital nuevo"],
+            )
+            order.append(ticker)
+            existing = by_ticker[ticker]
+        elif existing.action in _SELL_LIKE:
+            # El validator debería rechazar; igual forzamos mantener acá.
+            existing.action = "mantener"
+            existing.quantity = None
+            existing.pct_of_position = None
+            existing.rationale = (
+                f"Restricción activa 'no vender {ticker}': se mantiene la posición. "
+                + (existing.rationale or "")
+            ).strip()
+
+        if not existing.risk_notes:
+            existing.risk_notes = [
+                f"Concentración/riesgo de {ticker} permanece aunque no se pueda vender."
+            ]
+        if not existing.mitigations:
+            if ticker == "YPFD":
+                existing.mitigations = [
+                    "Reducir VIST (mismo driver) en lugar de YPFD",
+                    "Asignar capital nuevo fuera del cluster energético",
+                ]
+            else:
+                existing.mitigations = [
+                    "Diversificar con capital nuevo u otros tickers del cluster"
+                ]
+
+    # Mitigación canónica GC-2: si YPFD restringido y hay VIST, acción sell-like.
+    if "YPFD" in restricted:
+        vist_qty = _qty(snapshot, "VIST")
+        if vist_qty > 0:
+            vist = by_ticker.get("VIST")
+            if vist is None or vist.action not in _SELL_LIKE:
+                by_ticker["VIST"] = PlanAction(
+                    ticker="VIST",
+                    action="salir",
+                    quantity=vist_qty,
+                    pct_of_position=Decimal("1"),
+                    rationale=(
+                        "Mitigación alternativa a no poder vender YPFD: "
+                        "salir de VIST (mismo cluster energético)."
+                    ),
+                    risk_notes=["Reduce exposición al driver energía argentina"],
+                    mitigations=[],
+                )
+                if "VIST" not in order:
+                    order.append("VIST")
+
+    return [by_ticker[t] for t in order if t in by_ticker]
 
 
 def _qty(snapshot: Snapshot, ticker: str) -> Decimal:

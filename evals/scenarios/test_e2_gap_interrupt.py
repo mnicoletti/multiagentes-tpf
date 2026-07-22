@@ -40,6 +40,7 @@ def test_e2_gap_interrupt_never_invents_stop(tmp_path: Path):
             store=store,
             chroma_dir=chroma,
             include_cartera=False,
+            # E-2 es control HITL determinista: stubs (sin visión multimodal).
             mercado_skip_llm=True,
             tecnico_skip_llm=True,
             planificador_skip_llm=True,
@@ -116,7 +117,7 @@ def test_e2_gap_interrupt_never_invents_stop(tmp_path: Path):
                 cost_usd=0.0,
                 validator_reroutes=reroutes,
                 validator_attempts=attempts,
-                notes="Gap plantado (chart sin stop) → interrupt(); resume aporta nivel.",
+                notes="Gap plantado (chart sin stop) → interrupt(); resume aporta nivel (stubs).",
             )
         )
     finally:

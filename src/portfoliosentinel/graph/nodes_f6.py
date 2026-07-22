@@ -14,11 +14,20 @@ from portfoliosentinel.agents.prompts.redactor import (
 )
 from portfoliosentinel.config.models import get_chat_model
 from portfoliosentinel.graph.logging_utils import get_node_logger, log_json
+from portfoliosentinel.graph.message_text import message_text
 from portfoliosentinel.graph.report_builder import build_report_from_state
 from portfoliosentinel.graph.state import PortfolioState
 from portfoliosentinel.tools.guardrails import lint_report, max_report_linter_retries
 
 logger = get_node_logger("portfoliosentinel.graph.nodes_f6")
+
+# Marcadores mínimos del linter (SPEC §6.3 / guardrails.yaml). Si el LLM
+# no los trae, no quemamos 3 reintentos: caemos al builder determinista.
+_STRUCTURE_MARKERS = (
+    "## 1. Encabezado",
+    "## 7. Plan de acción consolidado",
+    "no constituye asesoramiento financiero",
+)
 
 
 def _strip_fences(raw: str) -> str:
@@ -29,6 +38,10 @@ def _strip_fences(raw: str) -> str:
     return text
 
 
+def _looks_structured(report_md: str) -> bool:
+    return all(marker in report_md for marker in _STRUCTURE_MARKERS)
+
+
 def _invoke_redactor_llm(model: object, user_msg: str) -> str:
     raw = model.invoke(  # type: ignore[attr-defined]
         [
@@ -36,12 +49,7 @@ def _invoke_redactor_llm(model: object, user_msg: str) -> str:
             HumanMessage(content=user_msg),
         ]
     )
-    content = raw.content if hasattr(raw, "content") else str(raw)
-    if isinstance(content, list):
-        content = "".join(
-            block.get("text", "") if isinstance(block, dict) else str(block) for block in content
-        )
-    return _strip_fences(str(content))
+    return _strip_fences(message_text(raw))
 
 
 def _snapshot_block(state: PortfolioState) -> str:
@@ -115,6 +123,16 @@ def redactor_node(state: PortfolioState, *, skip_llm: bool = False) -> dict:
         log_json(logger, "redactor_stub_done", run_id=run_id, chars=len(report_md))
         return {"report": report_md, "report_linter_feedback": []}
 
+    llm_attempt = len(state.get("report_lint_traces") or []) + 1
+    log_json(
+        logger,
+        "redactor_start",
+        run_id=run_id,
+        llm_attempt=llm_attempt,
+        had_feedback=bool(feedback),
+        feedback_n=len(feedback),
+    )
+
     user_msg = build_redactor_user_message(
         snapshot_block=_snapshot_block(state),
         constraints_block=constraints_block,
@@ -127,11 +145,25 @@ def redactor_node(state: PortfolioState, *, skip_llm: bool = False) -> dict:
         linter_feedback="\n".join(feedback),
     )
     model = get_chat_model("redactor")
+    used_fallback = False
     try:
         report_md = _invoke_redactor_llm(model, user_msg)
     except Exception as exc:  # noqa: BLE001 — degradar a informe determinista
         log_json(logger, "redactor_llm_failed", run_id=run_id, error=str(exc))
         report_md = build_report_from_state(state)
+        used_fallback = True
+
+    if not used_fallback and not _looks_structured(report_md):
+        # Evita el loop caro linter→redactor×3 cuando el LLM ignora §6.3.
+        log_json(
+            logger,
+            "redactor_structure_fallback",
+            run_id=run_id,
+            llm_chars=len(report_md),
+            preview=report_md[:160].replace("\n", " "),
+        )
+        report_md = build_report_from_state(state)
+        used_fallback = True
 
     log_json(
         logger,
@@ -139,6 +171,8 @@ def redactor_node(state: PortfolioState, *, skip_llm: bool = False) -> dict:
         run_id=run_id,
         chars=len(report_md),
         had_feedback=bool(feedback),
+        llm_attempt=llm_attempt,
+        used_fallback=used_fallback,
     )
     return {"report": report_md, "report_linter_feedback": []}
 

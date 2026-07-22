@@ -156,6 +156,54 @@ class RunOutcome:
     interrupted: bool = False
     interrupt_payload: Any = None
     cost_usd: float = 0.0
+    gap_resumes: int = 0
+
+
+# Stops sintéticos para auto-resume HITL en golden (no inventados por el planificador).
+_DEFAULT_STOPS: dict[str, str] = {
+    "GGAL": "6200",
+    "AAPL": "19000",
+    "YPFD": "24000",
+    "VIST": "9500",
+    "MELI": "28500",
+    "SPY": "19000",
+    "AL30": "7200",
+    "GD30": "7600",
+}
+
+
+def _interrupt_payload(graph: Any, config: dict[str, Any]) -> Any | None:
+    snap = graph.get_state(config)
+    if not snap.next:
+        return None
+    for task in getattr(snap, "tasks", ()) or ():
+        for ir in getattr(task, "interrupts", ()) or ():
+            return getattr(ir, "value", ir)
+    return {"type": "unknown"}
+
+
+def _gap_resume_payload(payload: Any) -> dict[str, Any]:
+    """Simula HITL: solo stop_levels (sin imágenes nuevas).
+
+    Así el grafo va gaps_interrupt → planificador sin re-correr visión multimodal
+    (que era el quemador de tokens en el loop de resume).
+    """
+    gaps = []
+    if isinstance(payload, dict):
+        gaps = list(payload.get("gaps") or [])
+    stop_levels: dict[str, str] = {}
+    for g in gaps:
+        if not isinstance(g, dict):
+            continue
+        ticker = str(g.get("ticker") or "").upper()
+        if not ticker:
+            continue
+        stop_levels[ticker] = _DEFAULT_STOPS.get(ticker, "100")
+    return {
+        "image_paths": [],
+        "image_purposes": {},
+        "stop_levels": stop_levels,
+    }
 
 
 def run_full_graph(
@@ -167,15 +215,35 @@ def run_full_graph(
     image_paths: list[str] | None = None,
     image_purposes: dict[str, str] | None = None,
     user_notes: str | None = None,
-    skip_llm: bool = True,
-    include_cartera: bool = False,
+    skip_llm: bool = False,
+    include_cartera: bool = True,
+    # Flags granulares: la visión multimodal (técnico) es el quemador de tokens.
+    mercado_skip_llm: bool | None = None,
+    tecnico_skip_llm: bool | None = None,
+    planificador_skip_llm: bool | None = None,
+    redactor_skip_llm: bool | None = None,
     web_fixture: Path | None = None,
     seed_snapshot_first: bool = False,
+    auto_resume_gaps: bool = True,
+    max_gap_resumes: int = 1,
 ) -> RunOutcome:
-    """Corrida e2e en modo fixture. skip_llm=True = núcleo determinista (ADR-0002)."""
+    """Corrida e2e en modo fixture.
+
+    Con `auto_resume_gaps=True` (default), si el planificador dispara info_gaps
+    el harness simula HITL (Opción A): resume con stop_levels y sigue hasta informe.
+    E-2 debe pasar `auto_resume_gaps=False` para assertar el interrupt.
+
+    Flags `*_skip_llm=None` heredan de `skip_llm`. En golden se recomienda
+    `tecnico_skip_llm=True` (visión) para no quemar API.
+    """
     ensure_fixture_mode()
     if web_fixture is not None:
         os.environ["PORTFOLIOSENTINEL_WEB_FIXTURE"] = str(web_fixture)
+
+    m_skip = skip_llm if mercado_skip_llm is None else mercado_skip_llm
+    t_skip = skip_llm if tecnico_skip_llm is None else tecnico_skip_llm
+    p_skip = skip_llm if planificador_skip_llm is None else planificador_skip_llm
+    r_skip = skip_llm if redactor_skip_llm is None else redactor_skip_llm
 
     domain = tmp_path / f"domain-{uuid.uuid4().hex[:8]}.sqlite"
     ck = tmp_path / f"ck-{uuid.uuid4().hex[:8]}.sqlite"
@@ -214,21 +282,26 @@ def run_full_graph(
 
     thread_id = f"eval-{uuid.uuid4().hex[:10]}"
     t0 = time.perf_counter()
+    gap_resumes = 0
     try:
         graph = build_graph(
             checkpointer=checkpointer,
             store=store,
             chroma_dir=chroma,
-            include_cartera=include_cartera,
+            include_cartera=include_cartera and not skip_llm,
             include_mercado=True,
             include_tecnico=True,
             include_planificador=True,
-            mercado_skip_llm=skip_llm,
-            tecnico_skip_llm=skip_llm,
-            planificador_skip_llm=skip_llm,
-            redactor_skip_llm=skip_llm,
+            mercado_skip_llm=m_skip,
+            tecnico_skip_llm=t_skip,
+            planificador_skip_llm=p_skip,
+            redactor_skip_llm=r_skip,
         )
-        config = {"configurable": {"thread_id": thread_id}}
+        config: dict[str, Any] = {
+            "configurable": {"thread_id": thread_id},
+            # Tope duro: evita loops técnico↔planificador quemando API.
+            "recursion_limit": 25,
+        }
         state = initial_state(
             run_id=thread_id,
             xlsx_path=str(xlsx) if xlsx else None,
@@ -239,23 +312,32 @@ def run_full_graph(
             user_notes=user_notes,
         )
         result = graph.invoke(state, config=config)
-        latency = time.perf_counter() - t0
 
-        snap = graph.get_state(config)
-        interrupted = bool(snap.next)
-        payload = None
-        if interrupted:
-            for task in getattr(snap, "tasks", ()) or ():
-                for ir in getattr(task, "interrupts", ()) or ():
-                    payload = getattr(ir, "value", ir)
-                    break
+        # Opción A: auto-resume de info_gaps (solo stop_levels → planificador, sin visión).
+        while auto_resume_gaps and gap_resumes < max_gap_resumes:
+            payload = _interrupt_payload(graph, config)
+            if payload is None:
+                break
+            if not (isinstance(payload, dict) and payload.get("type") == "info_gaps"):
+                break
+            resume_body = _gap_resume_payload(payload)
+            result = graph.invoke(Command(resume=resume_body), config=config)
+            gap_resumes += 1
+
+        latency = time.perf_counter() - t0
+        final_payload = _interrupt_payload(graph, config)
+        interrupted = final_payload is not None
+        used_agent_llm = not (m_skip and t_skip and p_skip and r_skip)
         return RunOutcome(
             result=result,
             latency_s=latency,
             thread_id=thread_id,
             interrupted=interrupted,
-            interrupt_payload=payload,
-            cost_usd=estimate_cost_usd(used_llm_judge=False, used_agent_llm=not skip_llm),
+            interrupt_payload=final_payload,
+            cost_usd=estimate_cost_usd(
+                used_llm_judge=False, used_agent_llm=used_agent_llm
+            ),
+            gap_resumes=gap_resumes,
         )
     finally:
         conn.close()
@@ -272,7 +354,7 @@ def resume_gap(
     image_paths: list[str],
     image_purposes: dict[str, str],
     stop_levels: dict[str, str] | None = None,
-    skip_llm: bool = True,
+    skip_llm: bool = False,
 ) -> RunOutcome:
     ensure_fixture_mode()
     store = open_domain_store(domain_db)
@@ -460,10 +542,14 @@ def write_results_md(results: list[CaseResult] | None = None) -> Path:
             "",
             "- Principio ADR-0007: *lo verificable se verifica con código; "
             "el judge juzga solo lo semántico*.",
-            "- Agentes en eval: camino `skip_llm` "
-            "(núcleo determinista parser/calc/validator/linter).",
-            "- Judge: modelo/config en `evals/judge/models.yaml` "
-            "(distinto de `config/models.yaml`).",
+            "- Golden GC: agentes LLM (técnico/mercado stub anti-visión); "
+            "`auto_resume_gaps` simula HITL de stops para llegar al informe.",
+            "- Escenarios E-1..E-3: stubs `skip_llm` (asserts de control; "
+            "E-2 valida interrupt/resume sin visión multimodal).",
+            "- Judge: `evals/judge/models.yaml` (override: "
+            "`PORTFOLIOSENTINEL_JUDGE_MODELS_YAML`, ej. models.gemini.yaml).",
+            "- Costo en RESULTS es placeholder ($0); el gasto real lo marca "
+            "el proveedor (Anthropic/Google). Preferí Flash/Haiku por rol.",
             f"- Encabezados verificados: {', '.join(SECTION_HEADINGS)}",
             f"- Descargo matriculado: `{DISCLAIMER}`",
             "",

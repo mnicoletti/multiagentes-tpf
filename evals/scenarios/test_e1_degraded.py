@@ -8,6 +8,7 @@ from evals.harness import CaseResult, count_validator_reroutes, record_result, r
 
 
 def test_e1_degraded_mode(tmp_path: Path):
+    # Escenario de control: asserts de degradado/staleness — sin LLM (costo profe).
     outcome = run_full_graph(
         tmp_path,
         xlsx=None,
@@ -39,6 +40,6 @@ def test_e1_degraded_mode(tmp_path: Path):
             cost_usd=outcome.cost_usd,
             validator_reroutes=reroutes,
             validator_attempts=attempts,
-            notes="Sin .xlsx: último snapshot + marca de staleness en informe.",
+            notes="Sin .xlsx: último snapshot + marca de staleness (skip_llm stubs).",
         )
     )

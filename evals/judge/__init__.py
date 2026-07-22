@@ -6,6 +6,7 @@ Prohibido: compartir models.yaml / instancias con los agentes evaluados.
 from __future__ import annotations
 
 import json
+import os
 import re
 from functools import lru_cache
 from pathlib import Path
@@ -22,6 +23,15 @@ EVALS_DIR = JUDGE_DIR.parent
 DEFAULT_MODELS_YAML = JUDGE_DIR / "models.yaml"
 DEFAULT_PROMPT = JUDGE_DIR / "prompt_v1.md"
 PROMPT_VERSION = "v1"
+
+
+def _judge_models_path(path: str | None = None) -> Path:
+    if path:
+        return Path(path)
+    env = os.environ.get("PORTFOLIOSENTINEL_JUDGE_MODELS_YAML")
+    if env:
+        return Path(env)
+    return DEFAULT_MODELS_YAML
 
 
 class JudgeScore(BaseModel):
@@ -46,12 +56,16 @@ class JudgeConfigError(ValueError):
     """evals/judge/models.yaml inválido."""
 
 
-@lru_cache(maxsize=1)
 def load_judge_models_config(path: str | None = None) -> dict[str, Any]:
-    yaml_path = Path(path) if path else DEFAULT_MODELS_YAML
-    if not yaml_path.is_file():
-        raise JudgeConfigError(f"No se encontró judge models.yaml en {yaml_path}")
-    raw = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+    return _load_judge_models_config(str(_judge_models_path(path).resolve()))
+
+
+@lru_cache(maxsize=4)
+def _load_judge_models_config(yaml_path: str) -> dict[str, Any]:
+    path = Path(yaml_path)
+    if not path.is_file():
+        raise JudgeConfigError(f"No se encontró judge models.yaml en {path}")
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict) or "roles" not in raw:
         raise JudgeConfigError("judge models.yaml debe tener 'roles'")
     roles = raw["roles"]

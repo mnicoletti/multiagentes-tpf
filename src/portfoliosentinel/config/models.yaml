@@ -38,6 +38,7 @@ roles:
     model: claude-sonnet-4-5-20250929
     params:
       temperature: 0
+      max_tokens: 8192
 
   # Nota F7: el harness de evals NO usa este bloque. El judge carga
   # exclusivamente evals/judge/models.yaml (config distinta, ADR-0007).

@@ -1,0 +1,14 @@
+# Judge barato para Gemini (profesor / free tier).
+# Uso:
+#   export GOOGLE_API_KEY=...
+#   export PORTFOLIOSENTINEL_JUDGE_MODELS_YAML=evals/judge/models.gemini.yaml
+#   make eval
+#
+# Distinto de config/models.gemini.yaml de los agentes (ADR-0007).
+
+roles:
+  judge:
+    provider: google_genai
+    model: gemini-2.0-flash
+    params:
+      temperature: 0
