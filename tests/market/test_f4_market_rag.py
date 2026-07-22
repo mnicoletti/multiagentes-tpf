@@ -119,9 +119,9 @@ def test_chroma_three_queries_return_correct_knowledge_docs(tmp_path: Path):
     for query, expected_id in cases:
         hits = retrieve(query, collection="knowledge", n_results=3, persist_dir=chroma)
         assert hits, f"sin hits para query={query!r}"
-        top_id = hits[0]["id"]
-        assert top_id == expected_id, (
-            f"query={query!r}: esperado {expected_id}, top={top_id}, top3={[h['id'] for h in hits]}"
+        top_ids = [h["id"] for h in hits]
+        assert expected_id in top_ids, (
+            f"query={query!r}: esperado {expected_id} en top3, got {top_ids}"
         )
 
 

@@ -3,8 +3,9 @@
 # Preferí el venv local si existe (PEP 668 / Homebrew).
 PYTHON := $(shell if [ -x .venv/bin/python ]; then echo .venv/bin/python; else echo python3; fi)
 
-# Override opcional: PORTFOLIOSENTINEL_MODELS_YAML=... make run
+# Override opcional: MODELS_YAML=... XLSX=... make run
 MODELS_YAML ?=
+XLSX ?=
 A2A_HOST ?= 127.0.0.1
 A2A_PORT ?= 8765
 
@@ -13,6 +14,7 @@ install:
 	.venv/bin/pip install -U pip
 	.venv/bin/pip install -e ".[dev]"
 	.venv/bin/python scripts/build_synthetic_fixture.py
+	.venv/bin/python scripts/build_broker_layout_fixture.py
 	.venv/bin/python scripts/train_trend_model.py
 	.venv/bin/python scripts/build_image_fixtures.py
 
@@ -21,10 +23,12 @@ lint:
 	$(PYTHON) -m ruff format --check src tests scripts mcp_servers evals a2a_compliance
 
 run:
-	@if [ -n "$(MODELS_YAML)" ]; then \
-		PORTFOLIOSENTINEL_MODELS_YAML="$(MODELS_YAML)" MARKET_FIXTURE=1 $(PYTHON) -m portfoliosentinel.cli run --market-fixture; \
+	@ARGS="--market-fixture --confirm-constraints"; \
+	if [ -n "$(XLSX)" ]; then ARGS="$$ARGS --xlsx $(XLSX)"; fi; \
+	if [ -n "$(MODELS_YAML)" ]; then \
+		PORTFOLIOSENTINEL_MODELS_YAML="$(MODELS_YAML)" MARKET_FIXTURE=1 $(PYTHON) -m portfoliosentinel.cli run $$ARGS; \
 	else \
-		MARKET_FIXTURE=1 $(PYTHON) -m portfoliosentinel.cli run --market-fixture; \
+		MARKET_FIXTURE=1 $(PYTHON) -m portfoliosentinel.cli run $$ARGS; \
 	fi
 
 inspect:

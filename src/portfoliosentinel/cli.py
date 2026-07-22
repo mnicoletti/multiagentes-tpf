@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import uuid
 from decimal import Decimal
@@ -21,6 +22,38 @@ from portfoliosentinel.graph.builder import build_graph
 from portfoliosentinel.graph.checkpointer import get_checkpointer
 from portfoliosentinel.graph.state import Diagnosis, PortfolioState, RunInputs
 from portfoliosentinel.tools.portfolio_store import open_domain_store
+from portfoliosentinel.tools.report_io import DEFAULT_OUTPUT_DIR, save_report_markdown
+
+
+def _quiet_runtime_logs() -> None:
+    """En corridas normales, no inundar la consola con JSON de nodos."""
+    for name in (
+        "portfoliosentinel",
+        "portfoliosentinel.graph.nodes",
+        "portfoliosentinel.graph.nodes_f5",
+        "portfoliosentinel.graph.nodes_f6",
+        "portfoliosentinel.graph.nodes_a2a",
+        "portfoliosentinel.tools.parser",
+    ):
+        logging.getLogger(name).setLevel(logging.WARNING)
+
+
+def _emit_final_report(
+    report: str,
+    *,
+    output_dir: Path | str,
+    run_id: str | None,
+    thread_id: str | None = None,
+) -> Path:
+    """Guarda el informe como .md y muestra solo el path absoluto en consola."""
+    path = save_report_markdown(
+        report,
+        output_dir=output_dir,
+        run_id=run_id,
+        thread_id=thread_id,
+    )
+    print(f"Informe guardado: {path}", flush=True)
+    return path
 
 
 def _dec(v: Decimal) -> str:
@@ -133,6 +166,7 @@ def _print_interrupt_payload(payload: Any) -> None:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
+    _quiet_runtime_logs()
     if getattr(args, "market_fixture", False):
         os.environ["MARKET_FIXTURE"] = "1"
 
@@ -223,42 +257,30 @@ def cmd_run(args: argparse.Namespace) -> int:
                 print(f"  degraded_mode=True  staleness={result.get('staleness')}", flush=True)
             return 0
 
-        if diagnosis is not None:
-            print(format_radiografia(diagnosis, run_id=run_id, thread_id=thread_id))
         if result.get("degraded_mode"):
             st = result.get("staleness")
             print("\n[degraded] modo degradado activo", flush=True)
             if st is not None:
                 print(f"  {st.warning}", flush=True)
+
         if result.get("report"):
-            print("\n--- Informe final (linter OK) ---", flush=True)
-            print(result["report"], flush=True)
-        elif result.get("report_lint") is not None and not result["report_lint"].approved:
+            # El cuerpo del informe vive solo en el .md; en consola solo el path.
+            _emit_final_report(
+                result["report"],
+                output_dir=args.output_dir,
+                run_id=run_id,
+                thread_id=thread_id,
+            )
+            return 0
+
+        if result.get("report_lint") is not None and not result["report_lint"].approved:
             print("\n--- Informe NO emitido (linter rechazó) ---", flush=True)
             print(json.dumps(result["report_lint"].model_dump(), ensure_ascii=False, indent=2))
-        a2a = result.get("a2a_review")
-        if a2a is not None:
-            print("\n=== Revisión externa (A2A) ===", flush=True)
-            print(
-                json.dumps(a2a.model_dump(), ensure_ascii=False, indent=2),
-                flush=True,
-            )
-        if result.get("report_lint_traces"):
-            print("\n=== Trazas report linter ===", flush=True)
-            print(
-                json.dumps(result["report_lint_traces"], ensure_ascii=False, indent=2),
-                flush=True,
-            )
-        mc = result.get("market_context")
-        if mc is not None:
-            print("\n=== Contexto de mercado ===", flush=True)
-            print(mc.summary, flush=True)
-            if mc.mep_warning:
-                print(f"\n[WARNING MEP] {mc.mep_warning}", flush=True)
-            if mc.citations:
-                print("Citas:", flush=True)
-                for c in mc.citations:
-                    print(f"  - [{c.get('source_id')}] {c.get('note')}", flush=True)
+            return 1
+
+        # Sin informe: mostrar radiografía/plan para depuración / corridas parciales.
+        if diagnosis is not None:
+            print(format_radiografia(diagnosis, run_id=run_id, thread_id=thread_id))
         plan = result.get("plan")
         if plan is not None:
             print("\n=== Plan de rebalanceo ===", flush=True)
@@ -270,20 +292,6 @@ def cmd_run(args: argparse.Namespace) -> int:
                     + (f" stop={a.stop_level}" if a.stop_level is not None else ""),
                     flush=True,
                 )
-            if plan.ml_inputs:
-                print("Insumos predict_trend:", flush=True)
-                for m in plan.ml_inputs:
-                    print(f"  - {m.note}", flush=True)
-        if result.get("validator_traces"):
-            print("\n=== Trazas validator ===", flush=True)
-            print(json.dumps(result["validator_traces"], ensure_ascii=False, indent=2), flush=True)
-        if _langsmith_configured():
-            print("\n[observabilidad] LangSmith configurado (env vars presentes).")
-        else:
-            print(
-                "\n[observabilidad] LangSmith NO configurado "
-                "(sin LANGSMITH_API_KEY / LANGCHAIN_API_KEY)."
-            )
         return 0
     finally:
         conn.close()
@@ -345,6 +353,7 @@ def cmd_inspect(args: argparse.Namespace) -> int:
 
 
 def cmd_resume(args: argparse.Namespace) -> int:
+    _quiet_runtime_logs()
     db_path = Path(args.checkpoint_db)
     domain_db = Path(args.domain_db)
     checkpointer, conn = get_checkpointer(db_path)
@@ -414,6 +423,18 @@ def cmd_resume(args: argparse.Namespace) -> int:
 
         diagnosis = result.get("diagnosis")
         run_id = result.get("run_id", args.thread_id)
+        if result.get("report"):
+            _emit_final_report(
+                result["report"],
+                output_dir=args.output_dir,
+                run_id=run_id,
+                thread_id=args.thread_id,
+            )
+            return 0
+        if result.get("report_lint") is not None and not result["report_lint"].approved:
+            print("\n--- Informe NO emitido (linter rechazó) ---")
+            print(json.dumps(result["report_lint"].model_dump(), ensure_ascii=False, indent=2))
+            return 1
         if diagnosis is not None:
             print(format_radiografia(diagnosis, run_id=run_id, thread_id=args.thread_id))
         plan = result.get("plan")
@@ -425,12 +446,6 @@ def cmd_resume(args: argparse.Namespace) -> int:
                     + (f" qty={a.quantity}" if a.quantity is not None else "")
                     + (f" stop={a.stop_level}" if a.stop_level is not None else "")
                 )
-        if result.get("report"):
-            print("\n--- Informe final (linter OK) ---")
-            print(result["report"])
-        elif result.get("report_lint") is not None and not result["report_lint"].approved:
-            print("\n--- Informe NO emitido (linter rechazó) ---")
-            print(json.dumps(result["report_lint"].model_dump(), ensure_ascii=False, indent=2))
         if diagnosis is None and not result.get("report") and plan is None:
             print("Resume terminó sin diagnosis/plan/report (¿sigue pausado?)")
             return 1
@@ -491,6 +506,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["intake", "orquestador"],
         help="Pausa tras el nodo (checkpoint) para demo de inspección",
     )
+    run.add_argument(
+        "--output-dir",
+        type=str,
+        default=str(DEFAULT_OUTPUT_DIR),
+        help="Directorio donde guardar el informe .md (default: output/reports)",
+    )
     run.set_defaults(func=cmd_run)
 
     insp = sub.add_parser("inspect", help="Inspecciona estado checkpointeado por thread_id")
@@ -537,6 +558,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--skip-llm",
         action="store_true",
         help="Debe coincidir con la corrida original si usó stubs",
+    )
+    nxt.add_argument(
+        "--output-dir",
+        type=str,
+        default=str(DEFAULT_OUTPUT_DIR),
+        help="Directorio donde guardar el informe .md (default: output/reports)",
     )
     nxt.set_defaults(func=cmd_resume)
 

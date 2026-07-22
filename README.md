@@ -1,52 +1,173 @@
 # PortfolioSentinel
 
 Sistema multiagente para revisión on-demand de una cartera minorista argentina
-(LangGraph + MCP + RAG + A2A consultivo). No ejecuta órdenes; todo informe
+(LangGraph + MCP + RAG + A2A consultivo). **No ejecuta órdenes**; todo informe
 incluye descargo de no-asesoramiento.
 
-Diseño: `docs/SPEC-portfoliosentinel.md` · ADRs en `docs/adrs/` · informe académico
-en `docs/INFORME-esqueleto.md`.
+Diseño: [`docs/SPEC-portfoliosentinel.md`](docs/SPEC-portfoliosentinel.md) ·
+ADRs en [`docs/adrs/`](docs/adrs/) · informe académico en
+[`docs/INFORME-esqueleto.md`](docs/INFORME-esqueleto.md).
+
+## Requisitos
+
+- Python 3.11+
+- `make`
+- Una clave de LLM **o** [Ollama](https://ollama.com) local
 
 ## Instalación
 
-Requisitos: Python 3.11+, `make`, y una clave de LLM **o** Ollama local.
-
 ```bash
-make install          # .venv + deps + fixture sintética + artefacto ML + imágenes
-# Exportá ANTHROPIC_API_KEY / GOOGLE_API_KEY según el YAML de modelos
+make install          # .venv + deps + fixtures (xlsx sintético, layout bróker, ML, imágenes)
+# Creá .env con ANTHROPIC_API_KEY y/o GOOGLE_API_KEY (nunca lo commitees)
 make lint
-make test             # parser, grafo, store, A2A (sin red salvo lo que el test monte)
+make test             # equivale a MARKET_FIXTURE=1 pytest
 ```
 
-Variables útiles:
-
-| Variable | Rol |
-|---|---|
-| `PORTFOLIOSENTINEL_MODELS_YAML` | Override de modelos por rol (ADR-0009) |
-| `MARKET_FIXTURE=1` | FX/quotes/web desde `fixtures/` (demo sin APIs vivas) |
-| `A2A_BASE_URL` | Base del servicio compliance (default `http://127.0.0.1:8765`) |
-| `A2A_SKIP_LLM=1` | Revisor A2A solo con reglas deterministas |
-
-## Ejecución
+En `.env` (nunca lo commitees):
 
 ```bash
-# Corrida completa (fixtures de mercado). Anthropic por defecto.
-make run
-# equivalente:
-.venv/bin/python -m portfoliosentinel.cli run --market-fixture --confirm-constraints
+# Elegí según el YAML de modelos (ver sección Modelos)
+ANTHROPIC_API_KEY=...
+# GOOGLE_API_KEY=...
+# LANGSMITH_API_KEY=...   # opcional, observabilidad
+```
 
-# Con restricción + capital:
+## Modelos (Anthropic / Google / Ollama)
+
+Toda instanciación pasa por `init_chat_model` + YAML por rol (ADR-0009).
+**No hay modelos hardcodeados en el grafo.**
+
+| Proveedor | YAML | Variable de entorno | Cómo correr |
+|---|---|---|---|
+| Anthropic (default) | `src/portfoliosentinel/config/models.yaml` | `ANTHROPIC_API_KEY` | `make run` |
+| Google Gemini | `src/portfoliosentinel/config/models.gemini.yaml` | `GOOGLE_API_KEY` | `MODELS_YAML=src/portfoliosentinel/config/models.gemini.yaml make run` |
+| Ollama local | `src/portfoliosentinel/config/models.ollama.yaml` | (ninguna; daemon Ollama) | `MODELS_YAML=src/portfoliosentinel/config/models.ollama.yaml make run` |
+
+También podés exportar `PORTFOLIOSENTINEL_MODELS_YAML=...` en lugar de `MODELS_YAML=`.
+
+### Receta Ollama
+
+```bash
+ollama pull qwen3:8b          # orquestador / tool calling
+ollama pull qwen2.5vl:7b      # visión (Analista Técnico)
+make run MODELS_YAML=src/portfoliosentinel/config/models.ollama.yaml
+```
+
+El orquestador necesita un modelo con **tool calling** confiable (`qwen3` o similar).
+El rol `tecnico` necesita visión multimodal; con solo-texto la lectura de gráficos degrada.
+
+## Tu estado de cuenta (`.xlsx` propio)
+
+El parser es **multi-layout** (ADR-0010): normaliza el export del bróker o la fixture
+sintética a un `AccountSnapshot` tipado. Scrubbing de PII → alias `INV-001` antes de
+cualquier LLM o BD.
+
+```bash
+# Copiá tu estado a un path local (tmp/ está en .gitignore)
+cp ~/Descargas/estadocuenta.xlsx tmp/mi-estado.xlsx
+
+make run XLSX=tmp/mi-estado.xlsx
+
+# o CLI directa:
+.venv/bin/python -m portfoliosentinel.cli run \
+  --xlsx tmp/mi-estado.xlsx \
+  --market-fixture \
+  --confirm-constraints
+```
+
+Los **tickers nuevos** se reconocen solos desde el snapshot (sin lista humana ni HITL).
+
+### Cotizaciones y MEP
+
+| Modo | Cómo | Uso |
+|---|---|---|
+| Fixture de mercado | `--market-fixture` / `MARKET_FIXTURE=1` | Demo/evals sin red |
+| Live (MCP market-data) | sin `--market-fixture` | dolarapi + panel (si hay red) |
+| Precios del estado | automático | Si faltan tickers en el feed, se usan `PRECIO` del `.xlsx` y el MEP implícito del estado |
+
+Para una cartera real con papeles fuera de la fixture, la valuación del día del
+estado completa las cotizaciones faltantes. El diseño asume un MCP live; la
+prueba local no depende de que el panel conozca cada ticker de antemano.
+
+**Privacidad:** no commitees `.xlsx` reales ni imágenes con datos del titular.
+Usá `tmp/` (gitignored) o `*.local.xlsx`.
+
+## Informe en Markdown
+
+Al terminar una corrida con linter OK, el informe se guarda como `.md` en
+`output/reports/` (configurable con `--output-dir`). **No se vuelca el cuerpo
+en consola**: solo se imprime el path absoluto, por ejemplo:
+
+```text
+Informe guardado: /…/output/reports/informe-<run_id>.md
+```
+
+Abrí ese archivo para leerlo. Recomendamos [Obsidian](https://obsidian.md/)
+(app local para notas Markdown): sitio oficial [obsidian.md](https://obsidian.md/) ·
+[descarga](https://obsidian.md/download). Podés abrir `output/reports` como vault
+o arrastrar el `.md` a Obsidian.
+
+`output/` está en `.gitignore`: no versiones informes de cuentas reales.
+
+## Imágenes (análisis técnico / FCI)
+
+Pasá paneles y gráficos con `--image path::purpose` (purpose declarado por vos):
+
+```bash
+.venv/bin/python -m portfoliosentinel.cli run \
+  --xlsx tmp/mi-estado.xlsx \
+  --market-fixture --confirm-constraints \
+  --image fixtures/images/fci-panel.png::fci_panel \
+  --image path/a/chart-ypfd.png::stop_chart \
+  --image path/a/chart-screening.png::screening
+```
+
+Purposes útiles: `fci_panel`, `stop_chart`, `screening` (u otros que declares).
+Si falta un stop/nivel fino, el grafo hace `interrupt()` (HITL) — **no inventa niveles**.
+
+### Resume HITL (gaps / echo-back / escalate)
+
+```bash
+# Tras un interrupt (anotá el thread_id que imprime la CLI):
+.venv/bin/python -m portfoliosentinel.cli resume --thread-id <id> \
+  --image path/a/chart-ypfd.png::stop_chart \
+  --stop-level YPFD=45000
+
+# Echo-back de restricciones (si no usaste --confirm-constraints):
+.venv/bin/python -m portfoliosentinel.cli resume --thread-id <id>
+```
+
+Inspección del checkpoint:
+
+```bash
+make inspect THREAD_ID=<id>
+```
+
+## Ejemplos de uso
+
+```bash
+# 1. Corrida feliz (fixture sintética, default --xlsx)
+make run
+
+# 2. Estado de cuenta propio (detalle en sección anterior)
+make run XLSX=tmp/mi-estado.xlsx
+
+# 3. Restricción + capital nuevo
 .venv/bin/python -m portfoliosentinel.cli run --market-fixture --confirm-constraints \
   --constraint "no vender YPFD" --capital-new 500000
 
-# Modo degradado (sin .xlsx; último snapshot del store):
+# 4. Resume HITL tras interrupt (anotá el thread_id que imprime la CLI)
+.venv/bin/python -m portfoliosentinel.cli resume --thread-id <id> \
+  --stop-level YPFD=45000
+
+# Modo degradado (sin .xlsx; último snapshot del store)
 .venv/bin/python -m portfoliosentinel.cli run --no-xlsx --confirm-constraints --market-fixture
 
-# Determinista (stubs LLM; útil para ensayar el grafo):
+# Solo grafo determinista (stubs LLM; sin gastar tokens)
 .venv/bin/python -m portfoliosentinel.cli run --skip-llm --confirm-constraints --market-fixture
 ```
 
-### A2A (compliance consultivo)
+## A2A (compliance consultivo)
 
 Proceso separado (ADR-0008). Si está caído, el grafo **sigue** y el informe marca
 `revisión externa no disponible`.
@@ -56,71 +177,40 @@ Proceso separado (ADR-0008). Si está caído, el grafo **sigue** y el informe ma
 make a2a
 # Terminal 2
 curl -s http://127.0.0.1:8765/.well-known/agent.json | head
-make run   # o make demo
+make run
 ```
 
-Agent Card: `GET /.well-known/agent.json` — única skill `review_plan`.
-JSON-RPC: `POST /a2a` con `message/send` (también acepta `tasks/send`).
+Agent Card: `GET /.well-known/agent.json` — skill `review_plan`.
+JSON-RPC: `POST /a2a` con `message/send`.
+Demo sin LLM en el revisor: `A2A_SKIP_LLM=1 make a2a`.
 
-### Demo ensayada (DoD F8)
+## Demo F8 / Eval
 
 ```bash
-make demo
+make demo   # guion: feliz → restricción → gap/resume → eval parser → BD append-only
+make eval   # golden cases + escenarios
 ```
 
-Guion: corrida feliz → restricción YPFD → gap/resume → eval parser → BD append-only.
-
-### Eval
+Judge Gemini (opcional):
 
 ```bash
-make eval
-# Judge Gemini (profesor):
 PORTFOLIOSENTINEL_JUDGE_MODELS_YAML=evals/judge/models.gemini.yaml \
 PORTFOLIOSENTINEL_MODELS_YAML=src/portfoliosentinel/config/models.gemini.yaml \
   make eval
 ```
 
-Resultados: `evals/RESULTS.md`.
+Resultados: [`evals/RESULTS.md`](evals/RESULTS.md).
 
-### Inspección / HITL
+## Variables de entorno
 
-```bash
-.venv/bin/python -m portfoliosentinel.cli run --stop-after intake \
-  --thread-id demo-hitl --confirm-constraints --market-fixture
-make inspect THREAD_ID=demo-hitl
-.venv/bin/python -m portfoliosentinel.cli resume --thread-id demo-hitl
-```
-
-## Receta Ollama (sin API paga)
-
-1. Instalá [Ollama](https://ollama.com) y bajá modelos:
-
-```bash
-# Orquestador / roles con tool calling (imprescindible):
-ollama pull qwen3:8b
-# Visión del Analista Técnico (lectura de paneles/gráficos):
-ollama pull qwen2.5vl:7b
-# Alternativa visión: llama3.2-vision
-```
-
-2. Apuntá el YAML local:
-
-```bash
-make run MODELS_YAML=src/portfoliosentinel/config/models.ollama.yaml
-```
-
-3. **Por qué el orquestador necesita tool calling.** El orquestador rutea y confirma
-restricciones con herramientas estructuradas del grafo. Un modelo local sin tool
-calling confiable falla el echo-back / ruteo. `qwen3` (o similar con tools) es el
-mínimo razonable; no uses un modelo “chat-only” en ese rol.
-
-4. **Visión.** En `models.ollama.yaml` el rol `tecnico` debe usar un modelo
-multimodal (`qwen2.5vl`, `llama3.2-vision`, etc.). Con modelos solo-texto la
-lectura de gráficos degrada o falla; es una limitación documentada (ADR-0009),
-no un bug del grafo.
-
-5. **A2A local.** El rol `a2a` también lee el YAML; para demo sin LLM en el
-revisor: `A2A_SKIP_LLM=1 make a2a`.
+| Variable | Rol |
+|---|---|
+| `PORTFOLIOSENTINEL_MODELS_YAML` | Override de modelos por rol |
+| `MARKET_FIXTURE=1` | FX/quotes/web desde `fixtures/` |
+| `A2A_BASE_URL` | Base del compliance (default `http://127.0.0.1:8765`) |
+| `A2A_SKIP_LLM=1` | Revisor A2A solo con reglas deterministas |
+| `ANTHROPIC_API_KEY` / `GOOGLE_API_KEY` | Proveedor LLM |
+| `LANGSMITH_API_KEY` | Trazas opcionales |
 
 ## Arquitectura (una línea)
 
@@ -129,20 +219,18 @@ Orquestador + 5 especialistas (Cartera, Mercado, Técnico, Planificador, Redacto
 `market-data`) + Chroma + A2A consultivo. Checkpointer SQLite ≠ store de dominio
 append-only (ADR-0003).
 
-## Privacidad
-
-Cero PII real en el repo. Única fixture: `fixtures/estadocuenta-sintetico.xlsx`
-(alias post-parse `INV-001`). No commitear `.xlsx` ni imágenes reales del titular.
-
 ## Make targets
 
 | Target | Qué hace |
 |---|---|
 | `make install` | venv + deps + fixtures |
-| `make run` | corrida con `MARKET_FIXTURE=1` |
-| `make a2a` | levanta compliance en `:8765` |
-| `make demo` | guion F8 de 5 pasos |
+| `make run` | corrida `MARKET_FIXTURE=1` + `--confirm-constraints` |
+| `make run XLSX=tmp/mi.xlsx` | misma corrida con tu estado |
+| `make run MODELS_YAML=...` | override de modelos |
+| `make a2a` | compliance en `:8765` |
+| `make demo` | guion F8 |
 | `make eval` | GC + escenarios |
-| `make test` | pytest |
+| `make test` | pytest con fixture de mercado |
 | `make lint` | ruff |
 | `make inspect THREAD_ID=…` | checkpoint |
+| `make ingest-knowledge` | reingesta corpus RAG |

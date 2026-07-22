@@ -49,6 +49,11 @@ from portfoliosentinel.tools.portfolio_store import (
     snapshot_from_store_dict,
     snapshot_to_store_dict,
 )
+from portfoliosentinel.tools.statement_market import (
+    enrich_quotes_from_snapshot,
+    fx_overlay_statement_mep,
+    statement_as_of_iso,
+)
 from portfoliosentinel.tools.web_search import web_search
 
 logger = get_node_logger("portfoliosentinel.graph.nodes")
@@ -556,11 +561,16 @@ def analista_mercado_node(
     tickers = [p.ticker for p in snapshot.positions]
     fx = get_fx_rates()
     quotes = get_quotes(tickers)
+    # Tickers nuevos: rellenar con precios del estado (sin HITL ni lista humana).
+    quotes, filled_from_statement = enrich_quotes_from_snapshot(quotes, snapshot)
+    if filled_from_statement:
+        # Había tickers fuera del feed de mercado → valuación del xlsx manda en MEP.
+        fx = fx_overlay_statement_mep(fx, snapshot.mep_implied)
     mep_market = mep_mid_from_fx(fx)
     mep_check = check_mep_divergence(snapshot.mep_implied, mep_market)
 
     today = date.today()
-    as_of = today.isoformat()
+    as_of = statement_as_of_iso(snapshot)
     web_queries = [
         f"Mercado argentino acciones CEDEARS {as_of}",
         f"Dólar MEP CCL Argentina {as_of}",

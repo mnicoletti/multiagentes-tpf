@@ -142,3 +142,41 @@ def test_malformed_totals_mismatch(tmp_path: Path):
 def test_missing_file():
     with pytest.raises(MalformedStatementError, match="inexistente"):
         parse_account_statement("/tmp/no-existe-portfoliosentinel.xlsx")
+
+
+BROKER_FIXTURE = REPO_ROOT / "fixtures" / "estadocuenta-broker-layout.xlsx"
+
+
+@pytest.fixture(scope="module")
+def broker_snapshot():
+    if not BROKER_FIXTURE.is_file():
+        from scripts.build_broker_layout_fixture import build
+
+        build(BROKER_FIXTURE)
+    return parse_account_statement(BROKER_FIXTURE)
+
+
+def test_broker_layout_scrubbing(broker_snapshot):
+    assert broker_snapshot.investor_alias == exp.INVESTOR_ALIAS
+    dumped = broker_snapshot.model_dump_json()
+    assert "Titular-Sintetico-Broker" not in dumped
+    assert "COMITENTE-FICTICIO-BROKER" not in dumped
+
+
+def test_broker_layout_cash_aggregated(broker_snapshot):
+    by_ccy = {c.currency: c.amount for c in broker_snapshot.cash}
+    assert by_ccy["ARS"] == Decimal("100000.00")
+    assert by_ccy["USD"] == Decimal("75.00")
+
+
+def test_broker_layout_new_tickers_without_human_list(broker_snapshot):
+    tickers = {p.ticker for p in broker_snapshot.positions}
+    assert tickers == {"BMA", "TGNO4", "GD35", "NVDA", "QQQ"}
+    assert len(broker_snapshot.positions) == 5
+
+
+def test_broker_layout_totals_and_mep(broker_snapshot):
+    assert broker_snapshot.total_ars == Decimal("527502")
+    assert broker_snapshot.total_usd == Decimal("400")
+    assert broker_snapshot.mep_implied == broker_snapshot.total_ars / broker_snapshot.total_usd
+    assert broker_snapshot.as_of is not None
